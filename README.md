@@ -69,6 +69,24 @@ dsh plugin --profile web add "link:$(pwd)"
 
 插件内置提示段会指导模型按协议执行：建团队 → 按角色拉成员 → 拆任务声明依赖 → 领取并唤醒成员 → 轮询收集产出 → 汇报后删除（归档保留）。
 
+## 成员独立预设与人格（v0.2.0+）
+
+每个成员除了可以指定独立**模型**外，还可以挂载独立 **agent preset** 和自定义**人格**（persona）：
+
+- `preset`：成员挂载的 agent preset id（如 `story`）。成员默认继承队长的 preset；指定后，成员在创建后立即被重挂到该 preset——工具集、提示区段、skill、人格整套组成只对这个成员生效。
+- `persona`：成员的完整人格覆盖，替换默认成员人格模板（团队工具协议仍会追加在末尾，保证任务协作不被破坏）。
+- `model`：成员模型覆盖（既有能力）。
+
+例如在小说创作场景中，每个角色成员可以挂不同的 preset、用不同模型、配上完全独立的角色人格：
+
+```
+agent_teams_add_member(name="林晚", role="女主角", preset="story", model="deepseek-chat", persona="你是林晚……")
+```
+
+插件级默认：`cordis.patch.yml` 的 `memberPreset` 配置项可为所有未显式指定 preset 的成员提供默认值。
+
+> 注意：挂载 preset 需要进程内 subagent provider（`spawn`/`fork`）；`codex`/`claude-code`/`acp` 等进程外 provider 不支持，会明确报错。
+
 ## 开发 Skill
 
 仓库按开放 Agent Skills 规范提供 [`dsh-plugin-development`](skills/dsh-plugin-development/SKILL.md)，可直接安装：

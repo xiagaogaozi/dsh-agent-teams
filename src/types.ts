@@ -52,6 +52,18 @@ export interface TeamMember {
   role?: string
   /** Optional model override for this member. */
   model?: string
+  /**
+   * Optional agent-preset id to mount on this member (e.g. `story`).
+   * Requires an in-process provider whose child agents are registered in the
+   * `agents` service; applied right after the member is spawned, before any
+   * task work. Defaults to the plugin `memberPreset` config.
+   */
+  preset?: string
+  /**
+   * Optional full persona override for this member, replacing the default
+   * member persona template. The team tool protocol is appended after it.
+   */
+  persona?: string
   joinedAt: number
   status: MemberStatus
 }

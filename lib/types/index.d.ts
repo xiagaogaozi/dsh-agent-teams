@@ -37,6 +37,8 @@ export interface Config {
     maxMembers?: number;
     /** Prompt-section order for the usage policy (default `117`, after delegation policy). */
     promptSectionOrder?: number;
+    /** Default agent-preset id mounted on members that do not specify one via `agent_teams_add_member`. */
+    memberPreset?: string;
 }
 export declare const Config: z<Config>;
 export declare function apply(ctx: Context, config: Config): void;

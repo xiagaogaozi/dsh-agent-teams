@@ -22,10 +22,15 @@ export interface MemberRuntimeConfig {
     model?: string;
     /** Child delegation depth cap (0 forbids delegation entirely). */
     maxDepth?: number;
+    /** Default agent-preset id mounted on members that do not specify one. */
+    preset?: string;
 }
 /**
  * The member's system prompt (persona), shadowing the deployment persona for
- * that child. Self-contained: it replaces the whole persona section.
+ * that child. A custom `member.persona` replaces the default template
+ * entirely (the team tool protocol is still appended); otherwise the default
+ * member persona applies. Self-contained: it replaces the whole persona
+ * section.
  * @param team - the team the member joined.
  * @param member - the member record (name/role are read before spawning).
  * @param stateDir - configured state directory, so the member can locate the

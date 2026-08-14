@@ -54,6 +54,8 @@ export interface ToolsConfig {
   memberMaxDepth?: number
   /** Team size cap (members). */
   maxMembers: number
+  /** Default agent-preset id mounted on members (per-member `preset` wins). */
+  memberPreset?: string
 }
 
 /** The caller agent, or a loud failure for non-agent callers. */
@@ -255,11 +257,13 @@ export function registerAgentTeamsTools(ctx: Context, config: ToolsConfig): void
 
   ctx.tools.register(defineTool({
     name: 'agent_teams_add_member',
-    description: 'Add a member to your team: spawns a durable continuable subagent with a member persona. The member waits for your messages and works on assigned tasks; it can message you and teammates. One team per captain, members are capped by config.',
+    description: 'Add a member to your team: spawns a durable continuable subagent with a member persona. The member waits for your messages and works on assigned tasks; it can message you and teammates. One team per captain, members are capped by config. Optionally mount an independent agent preset on the member (preset id) and/or override its persona entirely.',
     parameters: {
       name: { type: 'string', required: true, description: 'Unique member name inside the team.' },
       role: { type: 'string', description: 'Role of the member (e.g. researcher, engineer, reviewer).' },
       model: { type: 'string', description: 'Optional model override for this member (defaults to the captain\'s model).' },
+      preset: { type: 'string', description: 'Optional agent-preset id to mount on this member (e.g. "story"). Requires an in-process subagent provider; the member inherits the captain\'s preset otherwise. Defaults to the plugin memberPreset config when unset.' },
+      persona: { type: 'string', description: 'Optional full persona override for this member, replacing the default member persona template entirely (the team tool protocol is still appended).' },
     },
     output: {
       schema: {
@@ -300,6 +304,8 @@ export function registerAgentTeamsTools(ctx: Context, config: ToolsConfig): void
           name: memberName,
           role: args.role,
           model: args.model,
+          preset: args.preset,
+          persona: args.persona,
           joinedAt: Date.now(),
           status: 'idle',
         }
@@ -793,6 +799,7 @@ function memberRuntime(config: ToolsConfig): MemberRuntimeConfig {
     provider: config.memberProvider,
     model: config.memberModel,
     maxDepth: config.memberMaxDepth,
+    preset: config.memberPreset,
   }
 }
 

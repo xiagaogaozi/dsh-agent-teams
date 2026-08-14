@@ -51,7 +51,7 @@ const WEB_SERVER_KEYS = ['webServer', 'httpServer'] as const
 const WORKSPACE_KEYS = ['workspaceRegistry', 'workspace'] as const
 
 export const name = 'agent-teams'
-export const inject = ['tools', 'subagents', 'systemPrompt', 'agents']
+export const inject = ['tools', 'subagents', 'systemPrompt', 'agents', 'agentPresets']
 
 /** Plugin configuration. */
 export interface Config {
@@ -70,6 +70,8 @@ export interface Config {
   maxMembers?: number
   /** Prompt-section order for the usage policy (default `117`, after delegation policy). */
   promptSectionOrder?: number
+  /** Default agent-preset id mounted on members that do not specify one via `agent_teams_add_member`. */
+  memberPreset?: string
 }
 
 export const Config: z<Config> = z.object({
@@ -79,6 +81,7 @@ export const Config: z<Config> = z.object({
   memberMaxDepth: z.natural().default(1),
   maxMembers: z.natural().min(1).default(8),
   promptSectionOrder: z.natural().default(117),
+  memberPreset: z.string(),
 })
 
 /** The model-facing usage policy: when and how to drive AgentTeams. */
@@ -101,6 +104,7 @@ export function apply(ctx: Context, config: Config): void {
     memberModel: config.memberModel,
     memberMaxDepth: config.memberMaxDepth ?? 1,
     maxMembers: config.maxMembers ?? 8,
+    memberPreset: config.memberPreset,
   }
 
   // Provider registration is a sibling plugin's effect (`subagent-spawn` /

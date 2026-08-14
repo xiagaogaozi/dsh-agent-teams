@@ -1,6 +1,6 @@
 {
   "name": "@nanmicoder/dsh-agent-teams",
-  "version": "0.1.2",
+  "version": "0.2.0",
   "description": "AgentTeams for DeepSeek Harness: multi-agent team collaboration (captain, members, tasks with dependencies, messaging) driven by natural language, with a tree monitor in the web GUI",
   "type": "module",
   "main": "lib/index.js",
@@ -29,10 +29,10 @@
     "email": "relakkes@gmail.com",
     "url": "https://github.com/NanmiCoder"
   },
-  "homepage": "https://github.com/NanmiCoder/dsh-agent-teams#readme",
+  "homepage": "https://github.com/xiagaogaozi/dsh-agent-teams#readme",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/NanmiCoder/dsh-agent-teams.git"
+    "url": "git+https://github.com/xiagaogaozi/dsh-agent-teams.git"
   },
   "bugs": {
     "url": "https://github.com/NanmiCoder/dsh-agent-teams/issues"
@@ -87,6 +87,7 @@
   "peerDependencies": {
     "@deepseek-ai/cordis": "^4.0.1-rc.1",
     "@deepseek-ai/dsh-agent": "^0.0.1-rc.1",
+    "@deepseek-ai/dsh-agent-presets": "^0.0.1-rc.1",
     "@deepseek-ai/dsh-client-locale": "^0.0.1-rc.1",
     "@deepseek-ai/dsh-client-runtime": "^0.0.1-rc.1",
     "@deepseek-ai/dsh-client-ui-conversation": "^0.0.1-rc.1",

@@ -22,6 +22,8 @@ export interface ToolsConfig {
     memberMaxDepth?: number;
     /** Team size cap (members). */
     maxMembers: number;
+    /** Default agent-preset id mounted on members (per-member `preset` wins). */
+    memberPreset?: string;
 }
 /**
  * Deliver a durable member report at the captain's nearest model boundary.
