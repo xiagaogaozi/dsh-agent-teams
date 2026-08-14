@@ -42,7 +42,7 @@ export const MemberProfileSchema = z.object({
 
 export const PROFILES_SCHEMA = z.object({ profiles: z.array(MemberProfileSchema) })
 
-export const PROFILES_NS = settingsNamespace('dshAgentTeams')
+export const PROFILES_NS = settingsNamespace('agent-teams')
 
 /** Load the profile list through the settings service (empty on first run). */
 export function readProfiles(scope: { get(): unknown }): MemberProfile[] {
