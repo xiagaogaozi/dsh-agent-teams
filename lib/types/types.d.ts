@@ -41,6 +41,8 @@ export interface TeamMember {
     role?: string;
     /** Optional model override for this member. */
     model?: string;
+    /** Optional reasoning effort injected on the member's requests (off/high/max). */
+    reasoningEffort?: string;
     /**
      * Optional agent-preset id to mount on this member (e.g. `story`).
      * Requires an in-process provider whose child agents are registered in the

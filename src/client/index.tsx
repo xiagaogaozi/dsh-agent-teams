@@ -8,6 +8,7 @@ import type {} from '@deepseek-ai/dsh-client-ui-conversation/client'
 import { ActivityPanel } from './ActivityPanel.tsx'
 import { AgentTeamsCard, type AgentTeamsCardInjected } from './AgentTeamsCard.tsx'
 import { agentTeamsCardDefinition } from './agent-teams-card-definition.ts'
+import { TeamSettingsPage } from './TeamSettingsPage.tsx'
 
 /** Required services: conversation nodes, slots, and sessions navigation. */
 export const inject = ['conversationEvents', 'slots', 'sessions']
@@ -41,4 +42,14 @@ export function apply(ctx: ClientContext): void {
       currentSessionId: () => ctx.sessions.list.getSnapshot().current,
     }),
   }, AgentTeamsCard))
+
+  // 「团队」settings page: the member-profile library editor. The slot name
+  // lives in the runtime settings contract; the typed union predates it, so
+  // cast at the boundary.
+  ctx.slots.inject('settings.section' as any, () => ctx.slots.register({
+    name: 'settings.section' as any,
+    id: 'agent-teams',
+    order: 50,
+    label: () => '团队',
+  }, TeamSettingsPage))
 }

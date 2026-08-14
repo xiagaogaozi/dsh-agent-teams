@@ -22,6 +22,8 @@ import z from '@deepseek-ai/schemastery'
 // Declaration merge only: makes ctx.subagents and ctx.systemPrompt visible.
 import type {} from '@deepseek-ai/dsh-subagent'
 import type {} from '@deepseek-ai/dsh-system-prompt'
+// Declaration merge only: makes ctx.settings visible.
+import type {} from '@deepseek-ai/dsh-settings'
 import type { WorkspaceRegistry } from '@deepseek-ai/dsh-workspace'
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import { registerAgentTeamsTools, type ToolsConfig } from './tools.ts'
@@ -29,6 +31,22 @@ import { readFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { collectArchivedTeamsActivity, collectTeamsActivity } from './snapshot.ts'
+import {
+  PROFILES_NS,
+  PROFILES_SCHEMA,
+  renderProfileDirectory,
+  snapshotProfiles,
+  type MemberProfile,
+} from './profiles.ts'
+
+/**
+ * The host-side package-private RPC helper injected by the Cordis runtime
+ * (host builtin). Typed inline: the runtime injects `harness` into host
+ * plugin code without a published ambient declaration.
+ */
+declare const harness: {
+  handle(method: string, handler: (args: any) => unknown | Promise<unknown>): () => void
+}
 
 /**
  * Structural slice of the web server service, compatible with both the
@@ -51,7 +69,7 @@ const WEB_SERVER_KEYS = ['webServer', 'httpServer'] as const
 const WORKSPACE_KEYS = ['workspaceRegistry', 'workspace'] as const
 
 export const name = 'agent-teams'
-export const inject = ['tools', 'subagents', 'systemPrompt', 'agents', 'agentPresets']
+export const inject = ['tools', 'subagents', 'systemPrompt', 'agents', 'agentPresets', 'settings']
 
 /** Plugin configuration. */
 export interface Config {
@@ -98,6 +116,27 @@ Tools: ${toolNames}`
 }
 
 export function apply(ctx: Context, config: Config): void {
+  // Member-profile library: persisted through the settings service, edited on
+  // the 「团队」 settings page (client), surfaced to the captain through a
+  // prompt variable, and applied by add_member(template=...).
+  const profileScope = ctx.settings.register(PROFILES_NS, PROFILES_SCHEMA)
+  const loadProfiles = (): MemberProfile[] => {
+    const value = profileScope.get() as { profiles?: MemberProfile[] } | undefined
+    return Array.isArray(value?.profiles) ? value.profiles! : []
+  }
+  harness.handle('agent-teams/profiles/get', async () => snapshotProfiles(ctx, loadProfiles()))
+  harness.handle('agent-teams/profiles/save', async (args: { profiles: MemberProfile[] }) => {
+    const profiles = Array.isArray(args?.profiles) ? args.profiles : []
+    await profileScope.replace({ profiles })
+    return { ok: true, count: profiles.length }
+  })
+  ctx.systemPrompt.variable('agentTeamsProfiles', () => renderProfileDirectory(loadProfiles()))
+  ctx.systemPrompt.section({
+    name: 'agent-teams:profiles',
+    order: (config.promptSectionOrder ?? 117) + 0.5,
+    text: '设置页「团队」维护了成员模板库，可用于按模板快速拉成员：\n{{agentTeamsProfiles}}',
+  })
+
   const resolved: ToolsConfig = {
     stateDir: config.stateDir ?? '.agent-teams',
     memberProvider: config.memberProvider ?? 'spawn',
@@ -105,6 +144,7 @@ export function apply(ctx: Context, config: Config): void {
     memberMaxDepth: config.memberMaxDepth ?? 1,
     maxMembers: config.maxMembers ?? 8,
     memberPreset: config.memberPreset,
+    loadProfiles,
   }
 
   // Provider registration is a sibling plugin's effect (`subagent-spawn` /

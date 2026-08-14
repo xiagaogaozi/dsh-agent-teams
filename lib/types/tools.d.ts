@@ -10,6 +10,7 @@
  */
 import type { Context } from '@deepseek-ai/cordis';
 import type { Agent } from '@deepseek-ai/dsh-agent';
+import type { MemberProfile } from './profiles.ts';
 /** Resolved plugin config consumed by the tools. */
 export interface ToolsConfig {
     /** State directory name under the captain's workspace. */
@@ -24,6 +25,8 @@ export interface ToolsConfig {
     maxMembers: number;
     /** Default agent-preset id mounted on members (per-member `preset` wins). */
     memberPreset?: string;
+    /** Synchronous reader of the member-profile library. */
+    loadProfiles: () => MemberProfile[];
 }
 /**
  * Deliver a durable member report at the captain's nearest model boundary.

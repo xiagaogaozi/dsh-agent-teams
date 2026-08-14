@@ -41,6 +41,7 @@ import {
   type MemberRuntimeConfig,
 } from './members.ts'
 import type { TeamMember, TeamState, TeamTask } from './types.ts'
+import type { MemberProfile } from './profiles.ts'
 
 /** Resolved plugin config consumed by the tools. */
 export interface ToolsConfig {
@@ -56,6 +57,8 @@ export interface ToolsConfig {
   maxMembers: number
   /** Default agent-preset id mounted on members (per-member `preset` wins). */
   memberPreset?: string
+  /** Synchronous reader of the member-profile library. */
+  loadProfiles: () => MemberProfile[]
 }
 
 /** The caller agent, or a loud failure for non-agent callers. */
@@ -264,6 +267,8 @@ export function registerAgentTeamsTools(ctx: Context, config: ToolsConfig): void
       model: { type: 'string', description: 'Optional model override for this member (defaults to the captain\'s model).' },
       preset: { type: 'string', description: 'Optional agent-preset id to mount on this member (e.g. "story"). Requires an in-process subagent provider; the member inherits the captain\'s preset otherwise. Defaults to the plugin memberPreset config when unset.' },
       persona: { type: 'string', description: 'Optional full persona override for this member, replacing the default member persona template entirely (the team tool protocol is still appended).' },
+      reasoning_effort: { type: 'string', description: 'Optional reasoning effort injected on this member\'s model requests ("off" | "high" | "max"; unset keeps the provider default). Requires an in-process subagent provider.' },
+      template: { type: 'string', description: 'Optional member-template name from the 团队 settings page; fills model, reasoning_effort and preset from that profile. Explicit arguments still win.' },
     },
     output: {
       schema: {
@@ -299,13 +304,29 @@ export function registerAgentTeamsTools(ctx: Context, config: ToolsConfig): void
         if (fresh.members.filter((candidate) => candidate.status !== 'removed').length >= config.maxMembers) {
           throw new Error(`team "${fresh.name}" is at its member cap (${config.maxMembers})`)
         }
+        // Apply the member template (settings page 「团队」) when named:
+        // fills model / reasoning_effort / preset from the profile. Explicit
+        // arguments win over template values.
+        let templateModel: string | undefined
+        let templatePreset: string | undefined
+        let templateEffort: string | undefined
+        if (args.template !== undefined) {
+          const profile = config.loadProfiles().find((candidate) => candidate.name === args.template)
+          if (profile === undefined) {
+            throw new Error(`member template "${args.template}" not found in the 团队 settings page`)
+          }
+          if (profile.model !== '') templateModel = profile.model
+          if (profile.preset !== '') templatePreset = profile.preset
+          if (profile.reasoningEffort !== '') templateEffort = profile.reasoningEffort
+        }
         const member: TeamMember = {
           id: '',
           name: memberName,
           role: args.role,
-          model: args.model,
-          preset: args.preset,
+          model: args.model ?? templateModel,
+          preset: args.preset ?? templatePreset,
           persona: args.persona,
+          reasoningEffort: args.reasoning_effort ?? templateEffort,
           joinedAt: Date.now(),
           status: 'idle',
         }
