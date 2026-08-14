@@ -53,13 +53,6 @@ export interface TeamMember {
      * member persona template. The team tool protocol is appended after it.
      */
     persona?: string;
-    /**
-     * Optional white-list of tools visible to this member (white-list mode):
-     * only these tools plus the AgentTeams collaboration tools remain. When
-     * unset, the member keeps its inherited/preset tool set minus the
-     * captain-only tools.
-     */
-    toolAllow?: string[];
     joinedAt: number;
     status: MemberStatus;
 }
