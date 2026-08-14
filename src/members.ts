@@ -30,6 +30,14 @@ const MEMBER_DENIED_TOOLS = [
   'agent_teams_delete',
 ] as const
 
+/** AgentTeams collaboration tools every member needs to work tasks. */
+const MEMBER_TOOLS = [
+  'agent_teams_claim_task',
+  'agent_teams_update_task',
+  'agent_teams_send_message',
+  'agent_teams_status',
+] as const
+
 /**
  * Restore the SessionId brand on a value that round-tripped through the
  * durable team file. The brand is erased by JSON serialization; the value
@@ -143,7 +151,12 @@ export async function spawnMember(
       prompt: [{ type: 'text', text: memberWelcome(team) }],
       parent: captain,
       persona: memberPersona(team, member, stateDir),
-      toolFilter: { deny: [...MEMBER_DENIED_TOOLS] },
+      // White-list mode: a member with `toolAllow` sees only those tools plus
+      // the AgentTeams collaboration tools; otherwise the inherited/preset
+      // tool set stays minus the captain-only tools.
+      toolFilter: member.toolAllow !== undefined
+        ? { allow: [...MEMBER_TOOLS, ...member.toolAllow] }
+        : { deny: [...MEMBER_DENIED_TOOLS] },
       ...config.model !== undefined ? { agentOptions: { model: config.model } } : {},
       ...config.maxDepth !== undefined ? { maxDepth: config.maxDepth } : {},
     },

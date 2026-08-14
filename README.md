@@ -75,12 +75,13 @@ dsh plugin --profile web add "link:$(pwd)"
 
 - `preset`：成员挂载的 agent preset id（如 `story`）。成员默认继承队长的 preset；指定后，成员在创建后立即被重挂到该 preset——工具集、提示区段、skill、人格整套组成只对这个成员生效。
 - `persona`：成员的完整人格覆盖，替换默认成员人格模板（团队工具协议仍会追加在末尾，保证任务协作不被破坏）。
+- `tool_allow`：成员工具的**白名单模式**——成员只能用列出的工具 + `agent_teams_*` 协作工具（claim/update/send_message/status），其余全部不可见。适合纯角色扮演等需要严格限制能力的场景；不传时保持默认（继承/预设的工具集减去队长专属工具）。
 - `model`：成员模型覆盖（既有能力）。
 
-例如在小说创作场景中，每个角色成员可以挂不同的 preset、用不同模型、配上完全独立的角色人格：
+例如在小说创作场景中，每个角色成员可以挂不同的 preset、用不同模型、配上完全独立的角色人格、只保留读文件工具：
 
 ```
-agent_teams_add_member(name="林晚", role="女主角", preset="story", model="deepseek-chat", persona="你是林晚……")
+agent_teams_add_member(name="林晚", role="女主角", preset="story", model="deepseek-chat", persona="你是林晚……", tool_allow=["read", "glob"])
 ```
 
 插件级默认：`cordis.patch.yml` 的 `memberPreset` 配置项可为所有未显式指定 preset 的成员提供默认值。
