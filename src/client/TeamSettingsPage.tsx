@@ -101,14 +101,21 @@ function Selector({
 
 export function TeamSettingsPage(): JSX.Element {
   const [snap, setSnap] = useState<Snapshot | null>(null)
+  const [error, setError] = useState<string | null>(null)
   const [selected, setSelected] = useState('')
   const [draft, setDraft] = useState<Profile | null>(null)
   const [confirmDelete, setConfirmDelete] = useState(false)
   const [busy, setBusy] = useState(false)
 
   const load = async (): Promise<void> => {
-    const s = (await host.call('agent-teams/profiles/get')) as Snapshot
-    setSnap(s)
+    try {
+      const s = (await host.call('agent-teams/profiles/get')) as Snapshot
+      setSnap(s)
+      setError(null)
+    } catch (err: unknown) {
+      setSnap(null)
+      setError(`无法加载成员模板：${err instanceof Error ? err.message : String(err)}（插件 host 可能未更新，请重启 dsh 后重试）`)
+    }
   }
   const save = async (profiles: Profile[]): Promise<void> => {
     setBusy(true)
@@ -165,7 +172,13 @@ export function TeamSettingsPage(): JSX.Element {
   }
 
   if (snap === null) {
-    return <div className={css.wrap}><div className={css.empty}>加载成员模板…</div></div>
+    return (
+      <div className={css.wrap}>
+        {error !== null
+          ? <div className={css.error}>{error}</div>
+          : <div className={css.empty}>加载成员模板…</div>}
+      </div>
+    )
   }
 
   return (
