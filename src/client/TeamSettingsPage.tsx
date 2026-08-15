@@ -24,11 +24,28 @@ import {
 import css from './TeamSettingsPage.module.css'
 
 /**
- * Package-private JSON RPC to this package's host half (client builtin).
- * Typed inline: the runtime injects `host` without a published ambient
- * declaration.
+ * Same-origin settings-page endpoint served by the host half. The
+ * package-private `harness.handle()` bridge exists only in the dynamic-code
+ * VM, not in an ordinary installed Cordis package, so the page talks to the
+ * host through this regular HTTP route instead.
  */
-declare const host: { call(method: string, args?: unknown): Promise<unknown> }
+const PROFILES_ROUTE = '/plugins/dsh-agent-teams/profiles'
+
+async function apiGet(): Promise<unknown> {
+  const res = await fetch(PROFILES_ROUTE, { cache: 'no-store' })
+  if (!res.ok) throw new Error(`HTTP ${res.status}`)
+  return res.json()
+}
+
+async function apiSave(profiles: Profile[]): Promise<void> {
+  const res = await fetch(PROFILES_ROUTE, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ profiles }),
+  })
+  if (!res.ok) throw new Error(`HTTP ${res.status}`)
+  await res.json()
+}
 
 /** One named member template (mirrors the host MemberProfile). */
 interface Profile {
@@ -109,7 +126,7 @@ export function TeamSettingsPage(): JSX.Element {
 
   const load = async (): Promise<void> => {
     try {
-      const s = (await host.call('agent-teams/profiles/get')) as Snapshot
+      const s = (await apiGet()) as Snapshot
       setSnap(s)
       setError(null)
     } catch (err: unknown) {
@@ -120,7 +137,7 @@ export function TeamSettingsPage(): JSX.Element {
   const save = async (profiles: Profile[]): Promise<void> => {
     setBusy(true)
     try {
-      await host.call('agent-teams/profiles/save', { profiles })
+      await apiSave(profiles)
       await load()
     } finally {
       setBusy(false)
