@@ -1,14 +1,26 @@
-﻿/**
+/**
  * 「团队」settings page: manage the member-profile library (named member
  * templates with a description, model, reasoning effort, and agent preset).
  * The library lives in the host `settings` service; this page talks to it
  * through the package-private RPC methods registered by the host half.
+ *
+ * Layout follows the official Setting-Cell convention (figma 'Setting-Cell'):
+ * 16/0 rows separated by `--dsw-alias-border-l2` hairlines, 14px titles,
+ * 36px selector pills (`--dsw-alias-bg-module-platform`) backed by the
+ * primitives `Menu`, and official `Icon*Outline*` glyphs — no custom icons.
  * @module dsh-agent-teams/client/TeamSettingsPage
  */
 
 import { useState } from 'react'
-import { Button } from '@deepseek-ai/dsh-client-ui-primitives'
-import { EditIcon, PlusIcon, TrashIcon } from './icons.tsx'
+import {
+  Button,
+  Input,
+  Menu,
+  IconChevronDownOutline14,
+  IconDownloadOutline16,
+  IconPlusOutline16,
+  IconTrashOutline16,
+} from '@deepseek-ai/dsh-client-ui-primitives'
 import css from './TeamSettingsPage.module.css'
 
 /**
@@ -37,23 +49,60 @@ interface Snapshot {
 
 const EMPTY_DRAFT: Profile = { name: '', description: '', model: '', reasoningEffort: '', preset: '' }
 
-function effortLabel(effort: string): string {
-  return effort === '' ? '默认' : effort
-}
-
-function modelLabel(model: string): string {
-  return model === '' ? '默认（队长的模型）' : model
-}
-
-function presetLabel(preset: string): string {
-  return preset === '' ? '继承（队长的预设）' : preset
+/** One pill selector: Menu + official chevron, in the Setting-Cell style. */
+function Selector({
+  value,
+  options,
+  display,
+  emptyLabel,
+  onSelect,
+  disabled,
+}: {
+  value: string
+  /** Option ids; `''` renders the empty/default entry. */
+  options: string[]
+  /** Label for a concrete option id. */
+  display: (id: string) => string
+  /** Label shown for the `''` (default) entry. */
+  emptyLabel: string
+  onSelect: (id: string) => void
+  disabled?: boolean
+}): JSX.Element {
+  const [open, setOpen] = useState(false)
+  const items = ['', ...options.filter((o) => o !== '')].map((id) => ({
+    id,
+    label: id === '' ? emptyLabel : display(id),
+  }))
+  return (
+    <Menu
+      open={open}
+      onClose={() => { setOpen(false) }}
+      items={items}
+      selectedId={value}
+      onSelect={(id) => { onSelect(id); setOpen(false) }}
+      align="end"
+      portal
+      anchor={(
+        <button
+          type="button"
+          className={css.selector}
+          aria-haspopup="menu"
+          aria-expanded={open}
+          disabled={disabled}
+          onClick={() => { setOpen(v => !v) }}
+        >
+          <span className={css.selectorText}>{value === '' ? emptyLabel : display(value)}</span>
+          <IconChevronDownOutline14 className={css.chevron} />
+        </button>
+      )}
+    />
+  )
 }
 
 export function TeamSettingsPage(): JSX.Element {
   const [snap, setSnap] = useState<Snapshot | null>(null)
   const [selected, setSelected] = useState('')
   const [draft, setDraft] = useState<Profile | null>(null)
-  const [nameEditable, setNameEditable] = useState(false)
   const [confirmDelete, setConfirmDelete] = useState(false)
   const [busy, setBusy] = useState(false)
 
@@ -71,25 +120,30 @@ export function TeamSettingsPage(): JSX.Element {
     }
   }
 
+  // Switching templates or adding discards unsaved edits (no cancel button).
   const onSelect = (name: string): void => {
     if (snap === null) return
     setSelected(name)
     const found = snap.profiles.find((p) => p.name === name)
     setDraft(found !== undefined ? { ...found } : null)
-    setNameEditable(false)
     setConfirmDelete(false)
   }
 
   const onAdd = (): void => {
     setSelected('')
     setDraft({ ...EMPTY_DRAFT })
-    setNameEditable(true)
     setConfirmDelete(false)
   }
 
-  const onRename = (): void => {
-    if (draft === null) return
-    setNameEditable(true)
+  const onSave = async (): Promise<void> => {
+    if (draft === null || snap === null) return
+    const name = draft.name.trim()
+    if (name === '') return
+    const next = snap.profiles.some((p) => p.name === name)
+      ? snap.profiles.map((p) => (p.name === name ? draft : p))
+      : [...snap.profiles, draft]
+    await save(next)
+    setSelected(name)
     setConfirmDelete(false)
   }
 
@@ -105,28 +159,9 @@ export function TeamSettingsPage(): JSX.Element {
     setSelected('')
   }
 
-  const onSave = async (): Promise<void> => {
-    if (draft === null || snap === null) return
-    const name = draft.name.trim()
-    if (name === '') return
-    const next = snap.profiles.some((p) => p.name === name)
-      ? snap.profiles.map((p) => (p.name === name ? draft : p))
-      : [...snap.profiles, draft]
-    await save(next)
-    setSelected(name)
-    setNameEditable(false)
-  }
-
-  const onCancel = (): void => {
-    if (selected !== '' && snap !== null) {
-      const found = snap.profiles.find((p) => p.name === selected)
-      setDraft(found !== undefined ? { ...found } : null)
-    } else {
-      setDraft(null)
-      setSelected('')
-    }
-    setNameEditable(false)
-    setConfirmDelete(false)
+  const patch = (field: keyof Profile, value: string): void => {
+    if (draft === null) return
+    setDraft({ ...draft, [field]: value })
   }
 
   if (snap === null) {
@@ -136,18 +171,25 @@ export function TeamSettingsPage(): JSX.Element {
   return (
     <div className={css.wrap}>
       <div className={css.pickerRow}>
-        <select
-          className={css.select}
+        <Selector
           value={selected}
-          onChange={(e) => onSelect(e.target.value)}
+          options={snap.profiles.map((p) => p.name)}
+          display={(n) => n}
+          emptyLabel="选择成员模板…"
+          onSelect={onSelect}
           disabled={busy}
-        >
-          <option value="">选择成员模板…</option>
-          {snap.profiles.map((p) => <option key={p.name} value={p.name}>{p.name}</option>)}
-        </select>
-        <Button variant="ghost" size="sm" icon={<PlusIcon />} title="添加成员模板" onClick={onAdd} disabled={busy}>添加</Button>
-        <Button variant="ghost" size="sm" icon={<EditIcon />} title="重命名成员模板" onClick={onRename} disabled={draft === null || busy}>重命名</Button>
-        <Button variant="ghost" size="sm" icon={<TrashIcon />} title={confirmDelete ? '再次点击确认删除' : '删除成员模板'} onClick={onDelete} disabled={draft === null || busy} className={confirmDelete ? css.danger : undefined}>{confirmDelete ? '确认?' : '删除'}</Button>
+        />
+        <Button variant="ghost" size="sm" icon={<IconPlusOutline16 />} title="添加成员模板" onClick={onAdd} disabled={busy}>添加</Button>
+        <Button variant="ghost" size="sm" icon={<IconDownloadOutline16 />} title="保存当前模板" onClick={onSave} disabled={draft === null || busy || draft.name.trim() === ''}>保存</Button>
+        <Button
+          variant="ghost"
+          size="sm"
+          icon={<IconTrashOutline16 />}
+          title={confirmDelete ? '再次点击确认删除' : '删除当前模板'}
+          onClick={onDelete}
+          disabled={draft === null || busy}
+          className={confirmDelete ? css.danger : undefined}
+        >{confirmDelete ? '确认?' : ''}</Button>
       </div>
 
       {draft === null ? (
@@ -158,68 +200,72 @@ export function TeamSettingsPage(): JSX.Element {
         </div>
       ) : (
         <div className={css.form}>
-          <div className={css.field}>
-            <span className={css.label}>名称</span>
-            {nameEditable ? (
-              <input
-                className={css.nameInput}
-                value={draft.name}
-                placeholder="成员模板名（唯一）"
-                onChange={(e) => setDraft({ ...draft, name: e.target.value })}
-                disabled={busy}
-              />
-            ) : (
-              <div className={css.nameStatic}>{draft.name}</div>
-            )}
+          <div className={css.row}>
+            <div className={css.rowText}>
+              <div className={css.title}>名称</div>
+            </div>
+            <Input
+              className={css.nameInput}
+              value={draft.name}
+              placeholder="模板名（唯一）"
+              disabled={busy}
+              onChange={(e) => patch('name', e.target.value)}
+            />
           </div>
-          <div className={css.field}>
-            <span className={css.label}>描述（发给主代理：什么时候才调用这个模板）</span>
+          <div className={css.row}>
+            <div className={css.rowText}>
+              <div className={css.title}>描述</div>
+              <div className={css.desc}>发给主代理：什么时候才调用这个模板</div>
+            </div>
             <textarea
               className={css.textarea}
               value={draft.description}
               placeholder="例：扮演女主角林晚时使用；需要剧情推进方案时使用……"
-              onChange={(e) => setDraft({ ...draft, description: e.target.value })}
+              disabled={busy}
+              onChange={(e) => patch('description', e.target.value)}
+            />
+          </div>
+          <div className={css.row}>
+            <div className={css.rowText}>
+              <div className={css.title}>模型</div>
+              <div className={css.desc}>成员使用的模型，默认跟随队长</div>
+            </div>
+            <Selector
+              value={draft.model}
+              options={snap.models}
+              display={(m) => m}
+              emptyLabel="默认（队长的模型）"
+              onSelect={(id) => patch('model', id)}
               disabled={busy}
             />
           </div>
-          <div className={css.field}>
-            <span className={css.label}>模型</span>
-            <select
-              className={css.select}
-              value={draft.model}
-              onChange={(e) => setDraft({ ...draft, model: e.target.value })}
-              disabled={busy}
-            >
-              <option value="">默认（队长的模型）</option>
-              {snap.models.map((m) => <option key={m} value={m}>{m}</option>)}
-            </select>
-          </div>
-          <div className={css.field}>
-            <span className={css.label}>推理等级</span>
-            <select
-              className={css.select}
+          <div className={css.row}>
+            <div className={css.rowText}>
+              <div className={css.title}>推理等级</div>
+              <div className={css.desc}>off / high / max，默认跟随模型</div>
+            </div>
+            <Selector
               value={draft.reasoningEffort}
-              onChange={(e) => setDraft({ ...draft, reasoningEffort: e.target.value })}
+              options={snap.efforts.filter((e) => e !== '')}
+              display={(e) => e}
+              emptyLabel="默认"
+              onSelect={(id) => patch('reasoningEffort', id)}
               disabled={busy}
-            >
-              {snap.efforts.map((e) => <option key={e} value={e}>{effortLabel(e)}</option>)}
-            </select>
+            />
           </div>
-          <div className={css.field}>
-            <span className={css.label}>预设</span>
-            <select
-              className={css.select}
+          <div className={css.row}>
+            <div className={css.rowText}>
+              <div className={css.title}>预设</div>
+              <div className={css.desc}>成员挂载的 agent 预设，默认继承队长</div>
+            </div>
+            <Selector
               value={draft.preset}
-              onChange={(e) => setDraft({ ...draft, preset: e.target.value })}
+              options={snap.presets}
+              display={(p) => p}
+              emptyLabel="继承（队长的预设）"
+              onSelect={(id) => patch('preset', id)}
               disabled={busy}
-            >
-              <option value="">继承（队长的预设）</option>
-              {snap.presets.map((p) => <option key={p} value={p}>{presetLabel(p)}</option>)}
-            </select>
-          </div>
-          <div className={css.actions}>
-            <Button variant="primary" size="md" onClick={onSave} disabled={busy || draft.name.trim() === ''}>保存</Button>
-            <Button variant="ghost" size="md" onClick={onCancel} disabled={busy}>取消</Button>
+            />
           </div>
           <div className={css.hint}>
             保存后，主代理的系统提示里会出现这份模板目录；调用 agent_teams_add_member(template="名字") 即可按模板拉成员（显式传入的 model / preset / persona 优先）。

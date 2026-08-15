@@ -1,62 +1,117 @@
+/* 「团队」settings page — official Setting-Cell convention (figma
+ * 'Setting-Cell': gap 8, pad 16/0, hairline separator) and selector pill
+ * (figma 'Selector': h36 r18, fill bg-module-platform, pad 0/14, gap 12).
+ * All colors are --dsw-* alias tokens; no hard-coded values. */
+
 .wrap {
   display: flex;
   flex-direction: column;
-  gap: 14px;
-  padding: 16px 18px;
-  max-width: 620px;
+  padding: 0 16px 16px;
+  max-width: 680px;
 }
 
 .pickerRow {
   display: flex;
   align-items: center;
   gap: 8px;
-}
-
-.select {
-  background: var(--dsw-alias-bg-layer-1);
-  color: var(--dsw-alias-label-primary);
-  border: 1px solid var(--dsw-alias-border-l1);
-  border-radius: 6px;
-  padding: 6px 8px;
-  font-size: 13px;
-  flex: 1;
-  min-width: 0;
-}
-
-.select:focus {
-  outline: none;
-  border-color: var(--dsw-alias-brand-primary);
+  padding: 16px 0;
+  border-bottom: 1px solid var(--dsw-alias-border-l2);
 }
 
 .form {
   display: flex;
   flex-direction: column;
-  gap: 10px;
 }
 
-.field {
+.row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 16px 0;
+  border-bottom: 1px solid var(--dsw-alias-border-l2);
+}
+
+.row:last-child {
+  border-bottom: none;
+}
+
+.rowText {
+  flex: 1;
+  min-width: 0;
   display: flex;
   flex-direction: column;
   gap: 4px;
+  padding-right: 48px;
 }
 
-.label {
-  color: var(--dsw-alias-label-secondary);
-  font-size: 12px;
-}
-
-.textarea {
-  background: var(--dsw-alias-bg-layer-1);
+.title {
+  font-size: 14px;
+  font-weight: 400;
+  line-height: 22px;
   color: var(--dsw-alias-label-primary);
-  border: 1px solid var(--dsw-alias-border-l1);
-  border-radius: 6px;
-  padding: 6px 8px;
-  font-size: 13px;
-  resize: vertical;
+}
+
+.desc {
+  font-size: 12px;
+  line-height: 18px;
+  color: var(--dsw-alias-label-secondary);
+}
+
+/* Selector pill (figma 'Selector': h36 r18, pad 0/14, gap 12). */
+.selector {
+  display: inline-flex;
+  align-items: center;
+  gap: 12px;
+  height: 36px;
+  padding: 0 14px;
+  border: none;
+  border-radius: 18px;
+  background: var(--dsw-alias-bg-module-platform);
+  font: inherit;
+  font-size: 14px;
+  line-height: 22px;
+  color: var(--dsw-alias-label-primary);
+  cursor: pointer;
+}
+
+.selector:hover:not(:disabled) {
+  background: var(--dsw-alias-interactive-bg-hover);
+}
+
+.selector:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.selectorText {
+  max-width: 220px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.chevron {
+  flex: none;
+}
+
+.nameInput {
+  width: 240px;
+}
+
+/* Multi-line description, aligned with the primitives Input tokens. */
+.textarea {
+  flex: 0 1 280px;
   min-height: 64px;
-  width: 100%;
+  border: 1px solid var(--dsw-alias-border-l2);
+  border-radius: 8px;
+  background: var(--dsw-alias-bg-layer-1);
+  padding: 6px 8px;
+  font: inherit;
+  font-size: 14px;
+  line-height: 22px;
+  color: var(--dsw-alias-label-primary);
+  resize: vertical;
   box-sizing: border-box;
-  font-family: inherit;
 }
 
 .textarea:focus {
@@ -64,43 +119,22 @@
   border-color: var(--dsw-alias-brand-primary);
 }
 
-.nameInput {
-  background: var(--dsw-alias-bg-layer-1);
-  color: var(--dsw-alias-label-primary);
-  border: 1px solid var(--dsw-alias-border-l1);
-  border-radius: 6px;
-  padding: 6px 8px;
-  font-size: 13px;
-  font-weight: 600;
-}
-
-.nameInput:focus {
-  outline: none;
-  border-color: var(--dsw-alias-brand-primary);
-}
-
-.nameStatic {
-  font-size: 14px;
-  font-weight: 600;
-  color: var(--dsw-alias-label-primary);
-  padding: 6px 2px;
+.textarea::placeholder {
+  color: var(--dsw-alias-label-dimmed);
 }
 
 .empty {
   color: var(--dsw-alias-label-secondary);
   font-size: 13px;
+  line-height: 20px;
+  padding: 16px 0;
 }
 
 .hint {
   color: var(--dsw-alias-label-secondary);
   font-size: 12px;
-  line-height: 1.5;
-}
-
-.actions {
-  display: flex;
-  gap: 8px;
-  align-items: center;
+  line-height: 18px;
+  padding-top: 12px;
 }
 
 .danger {

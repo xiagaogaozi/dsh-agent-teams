@@ -40,15 +40,6 @@ import {
 } from './profiles.ts'
 
 /**
- * The host-side package-private RPC helper injected by the Cordis runtime
- * (host builtin). Typed inline: the runtime injects `harness` into host
- * plugin code without a published ambient declaration.
- */
-declare const harness: {
-  handle(method: string, handler: (args: any) => unknown | Promise<unknown>): () => void
-}
-
-/**
  * Structural slice of the web server service, compatible with both the
  * published `dsh-host-webserver@0.0.1-rc.1` (`ctx.httpServer` /
  * `HttpServerService`) and the renamed `webServer` / `WebServer` in later
@@ -67,6 +58,39 @@ interface WebRouteHost {
 const WEB_SERVER_KEYS = ['webServer', 'httpServer'] as const
 /** Workspace registry service key candidates, newest first. */
 const WORKSPACE_KEYS = ['workspaceRegistry', 'workspace'] as const
+/** Same-origin settings-page endpoint for the member-profile library. */
+const PROFILES_ROUTE = '/plugins/dsh-agent-teams/profiles'
+
+/** Send one JSON response with the profile API's no-cache policy. */
+function writeJson(res: ServerResponse, status: number, value: unknown): void {
+  res.writeHead(status, {
+    'content-type': 'application/json; charset=utf-8',
+    'cache-control': 'no-store',
+  })
+  res.end(JSON.stringify(value))
+}
+
+/** Read one small JSON request body, rejecting malformed or oversized input. */
+async function readJson(req: IncomingMessage): Promise<unknown> {
+  const chunks: Buffer[] = []
+  let size = 0
+  for await (const chunk of req) {
+    const bytes = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk)
+    size += bytes.length
+    if (size > 256 * 1024) throw new Error('request body too large')
+    chunks.push(bytes)
+  }
+  const text = Buffer.concat(chunks).toString('utf8')
+  if (text === '') return undefined
+  return JSON.parse(text) as unknown
+}
+
+/** Whether one decoded JSON value is an object with an array `profiles` field. */
+function profilesFrom(value: unknown): MemberProfile[] | undefined {
+  if (typeof value !== 'object' || value === null) return undefined
+  const profiles = (value as { profiles?: unknown }).profiles
+  return Array.isArray(profiles) ? profiles as MemberProfile[] : undefined
+}
 
 export const name = 'agent-teams'
 export const inject = ['tools', 'subagents', 'systemPrompt', 'agents', 'agentPresets', 'settings']
@@ -124,17 +148,11 @@ export function apply(ctx: Context, config: Config): void {
     const value = profileScope.get() as { profiles?: MemberProfile[] } | undefined
     return Array.isArray(value?.profiles) ? value.profiles! : []
   }
-  harness.handle('agent-teams/profiles/get', async () => snapshotProfiles(ctx, loadProfiles()))
-  harness.handle('agent-teams/profiles/save', async (args: { profiles: MemberProfile[] }) => {
-    const profiles = Array.isArray(args?.profiles) ? args.profiles : []
-    await profileScope.replace({ profiles })
-    return { ok: true, count: profiles.length }
-  })
-  ctx.systemPrompt.variable('agentTeamsProfiles', () => renderProfileDirectory(loadProfiles()))
+  ctx.systemPrompt.variable('agent_teams_profiles', () => renderProfileDirectory(loadProfiles()))
   ctx.systemPrompt.section({
     name: 'agent-teams:profiles',
     order: (config.promptSectionOrder ?? 117) + 0.5,
-    text: '设置页「团队」维护了成员模板库，可用于按模板快速拉成员：\n{{agentTeamsProfiles}}',
+    text: '设置页「团队」维护了成员模板库，可用于按模板快速拉成员：\n{{agent_teams_profiles}}',
   })
 
   const resolved: ToolsConfig = {
@@ -184,6 +202,38 @@ export function apply(ctx: Context, config: Config): void {
     const workspaceRegistry = (ctx.get(WORKSPACE_KEYS[0]) ?? ctx.get(WORKSPACE_KEYS[1])) as WorkspaceRegistry | undefined
     if (webServer === undefined || workspaceRegistry === undefined) return
     webRegistered = true
+
+    // The package-private `harness.handle()` bridge exists only in the
+    // dynamic-code VM, not in an ordinary installed Cordis package. Keep the
+    // settings page in this package's regular host/client plane instead.
+    ctx.effect(() => webServer.register({
+      kind: 'exact',
+      path: PROFILES_ROUTE,
+      handler: async (req, res) => {
+        if (req.method === 'GET') {
+          writeJson(res, 200, await snapshotProfiles(ctx, loadProfiles()))
+          return
+        }
+        if (req.method !== 'POST') {
+          res.writeHead(405, { allow: 'GET, POST' })
+          res.end()
+          return
+        }
+        let profiles: MemberProfile[] | undefined
+        try {
+          profiles = profilesFrom(await readJson(req))
+        } catch {
+          writeJson(res, 400, { ok: false, error: 'invalid JSON body' })
+          return
+        }
+        if (profiles === undefined) {
+          writeJson(res, 400, { ok: false, error: 'profiles must be an array' })
+          return
+        }
+        await profileScope.replace({ profiles })
+        writeJson(res, 200, { ok: true, count: profiles.length })
+      },
+    }), 'agent-teams: profiles route')
 
     // Activity panel data route: the browser floater polls this for team
     // snapshots (disk truth + live subagent activity). Mirrors the Claude
