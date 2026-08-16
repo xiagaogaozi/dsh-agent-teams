@@ -57,7 +57,8 @@
   color: var(--dsw-alias-label-secondary);
 }
 
-/* Selector pill (figma 'Selector': h36 r18, pad 0/14, gap 12). */
+/* Selector pill (figma 'Selector': h36 r18, pad 0/14, gap 12). The template
+ * picker fills its row; the text flexes and the chevron stays fixed right. */
 .selector {
   display: inline-flex;
   align-items: center;
@@ -72,6 +73,8 @@
   line-height: 22px;
   color: var(--dsw-alias-label-primary);
   cursor: pointer;
+  flex: 1;
+  min-width: 0;
 }
 
 .selector:hover:not(:disabled) {
@@ -84,7 +87,8 @@
 }
 
 .selectorText {
-  max-width: 220px;
+  flex: 1;
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
