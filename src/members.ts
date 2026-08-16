@@ -173,6 +173,12 @@ export async function spawnMember(
     }
     try {
       await ctx.agentPresets.recompose(child.ctx, presetId)
+      // The durable commit point, mirroring the harness's own preset switch
+      // (api-proxy select): recompose swaps the live composition, and the
+      // `agent-preset/selected` session event persists the choice so a
+      // resumed/restored child remounts THIS preset instead of the inherited
+      // one recorded at creation.
+      child.session.append('agent-preset/selected', { agentPreset: presetId })
     } catch (error: unknown) {
       throw new Error(
         `agent-teams: failed to mount preset "${presetId}" on member "${member.name}": ${String(error)}`,
