@@ -65,11 +65,20 @@
   display: flex;
 }
 
+/* Non-portal mode: the dropdown renders inside the anchor span, so the
+ * opened list can be made to exactly match the pill's width. */
+.selectorWrap :global([role='menu']) {
+  width: 100%;
+  min-width: 0;
+  max-width: none;
+}
+
 /* Selector pill (figma 'Selector': h36 r18, pad 0/14, gap 12). The template
  * picker fills its row; the text flexes and the chevron stays fixed right. */
 .selector {
   display: inline-flex;
   align-items: center;
+  justify-content: flex-start;
   gap: 12px;
   height: 36px;
   padding: 0 14px;
@@ -100,6 +109,7 @@
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  text-align: left;
 }
 
 .chevron {
