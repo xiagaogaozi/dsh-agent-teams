@@ -23,7 +23,7 @@ import {
 import type { SessionId } from '@deepseek-ai/dsh-session/types'
 import type { ObservableSnapshot, SessionListState } from '@deepseek-ai/dsh-client-runtime/client'
 import { activityPanelExpandedForSession, relatedTaskIds, taskStages } from './activity-model.ts'
-import { ACTION_ART, LEAD_ART, memberArtUrl } from './artwork.ts'
+import { LEAD_ART, memberArtUrl } from './artwork.ts'
 import { OPEN_PANEL_EVENT } from './AgentTeamsCard.tsx'
 import type { AgentTeamsCardData } from './agent-teams-card-definition.ts'
 import css from './ActivityPanel.module.css'
@@ -348,7 +348,6 @@ function TeamSection({ team, onNavigate, historic = false }: {
                 >
                   <span className={css.memberAvatar} data-unread={member.unread > 0}>
                     <img className={css.memberArt} src={memberArtUrl(member.name, member.role)} alt="" aria-hidden />
-                    <img className={css.stateArt} data-activity={member.activity} src={ACTION_ART[member.activity]} alt="" aria-hidden />
                   </span>
                   <span className={css.memberInfo}>
                     <span className={css.memberLine}>
