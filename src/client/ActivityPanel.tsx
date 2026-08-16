@@ -347,11 +347,7 @@ function TeamSection({ team, onNavigate, historic = false }: {
                   onClick={() => { if (member.id !== '') onNavigate(member.id as SessionId) }}
                 >
                   <span className={css.memberAvatar} data-unread={member.unread > 0}>
-                    {memberArtUrl(member.name, member.role) !== null ? (
-                      <img className={css.memberArt} src={memberArtUrl(member.name, member.role) ?? ''} alt="" aria-hidden />
-                    ) : (
-                      <span className={css.memberInitial} style={{ background: accentOf(member.id) }}>{memberInitial(member.name)}</span>
-                    )}
+                    <img className={css.memberArt} src={memberArtUrl(member.name, member.role)} alt="" aria-hidden />
                     <img className={css.stateArt} data-activity={member.activity} src={ACTION_ART[member.activity]} alt="" aria-hidden />
                   </span>
                   <span className={css.memberInfo}>
@@ -652,11 +648,7 @@ export function ActivityPanel({ sessionsList, openSession }: {
                             onClick={() => { if (member.id !== '') navigateToSession(member.id as SessionId) }}
                           >
                             <span className={css.memberAvatar}>
-                              {memberArtUrl(member.name, member.role) !== null ? (
-                                <img className={css.memberArt} src={memberArtUrl(member.name, member.role) ?? ''} alt="" aria-hidden />
-                              ) : (
-                                <span className={css.memberInitial} style={{ background: accentOf(member.id) }}>{memberInitial(member.name)}</span>
-                              )}
+                              <img className={css.memberArt} src={memberArtUrl(member.name, member.role)} alt="" aria-hidden />
                             </span>
                             <span className={css.memberInfo}>
                               <span className={css.memberLine}>

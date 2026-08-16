@@ -111,11 +111,7 @@ export function AgentTeamsCard({ node, openSession, currentSessionId }: AgentTea
               onClick={() => { if (member.id !== '') openSession(member.id as SessionId) }}
               title={member.role === '' ? member.name : `${member.name} · ${member.role}`}
             >
-              {memberArtUrl(member.name, member.role) !== null ? (
-                <img className={css.memberArt} src={memberArtUrl(member.name, member.role) ?? ''} alt="" aria-hidden />
-              ) : (
-                <span className={css.memberInitial}>{member.name.trim().slice(0, 1).toUpperCase() || '?'}</span>
-              )}
+              <img className={css.memberArt} src={memberArtUrl(member.name, member.role)} alt="" aria-hidden />
               <span className={css.memberName}>{member.name}</span>
             </button>
           ))}

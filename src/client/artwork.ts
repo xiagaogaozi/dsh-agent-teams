@@ -22,6 +22,12 @@ const ROLE_ART: ReadonlyArray<readonly [RegExp, string]> = [
 /** Captain artwork (always the lead whale). */
 export const LEAD_ART = `${ART_BASE}team-lead.png`
 
+/**
+ * Fallback member artwork when no role keyword matches. Always an original
+ * whale glyph — never a name initial.
+ */
+export const DEFAULT_MEMBER_ART = `${ART_BASE}researcher.png`
+
 /** Status action artwork per member activity. */
 export const ACTION_ART: Record<'working' | 'idle' | 'unknown', string> = {
   working: `${ART_BASE}action-working.png`,
@@ -30,15 +36,16 @@ export const ACTION_ART: Record<'working' | 'idle' | 'unknown', string> = {
 }
 
 /**
- * Member artwork URL, or null when no role matches (initial-letter fallback).
+ * Member artwork URL. Role keywords map to the packaged role images; an
+ * unmatched member gets the default whale artwork.
  * @param name - the member's display name.
  * @param role - the member's role text.
- * @returns the artwork URL, or null when unmatched.
+ * @returns the artwork URL.
  */
-export function memberArtUrl(name: string, role: string): string | null {
+export function memberArtUrl(name: string, role: string): string {
   const identity = `${name} ${role}`.toLowerCase()
   for (const [pattern, art] of ROLE_ART) {
     if (pattern.test(identity)) return `${ART_BASE}${art}`
   }
-  return null
+  return DEFAULT_MEMBER_ART
 }
