@@ -82,6 +82,12 @@ check(
   registeredId === pkg.name,
   `bundle registers ${JSON.stringify(registeredId)}, package.json has ${JSON.stringify(pkg.name)}`,
 )
+const teamSettingsPage = await readFile(new URL('../lib/client/TeamSettingsPage.js', import.meta.url), 'utf8')
+check(
+  'team settings loads member templates on mount',
+  /useEffect\(\(\) => \{\s*void load\(\);\s*\}, \[\]\);/.test(teamSettingsPage),
+  'the settings page must request its profile snapshot instead of remaining in the loading state',
+)
 
 console.log('2/6 pure rules')
 check("sanitizeKey('My Team!') -> 'my-team'", sanitizeKey('My Team!') === 'my-team')

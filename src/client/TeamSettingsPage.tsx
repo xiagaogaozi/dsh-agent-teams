@@ -11,7 +11,7 @@
  * @module dsh-agent-teams/client/TeamSettingsPage
  */
 
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import {
   Button,
   Input,
@@ -134,6 +134,11 @@ export function TeamSettingsPage(): JSX.Element {
       setError(`无法加载成员模板：${err instanceof Error ? err.message : String(err)}（插件 host 可能未更新，请重启 dsh 后重试）`)
     }
   }
+
+  useEffect(() => {
+    void load()
+  }, [])
+
   const save = async (profiles: Profile[]): Promise<void> => {
     setBusy(true)
     try {
