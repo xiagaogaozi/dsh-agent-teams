@@ -99,6 +99,7 @@ function Selector({
       onSelect={(id) => { onSelect(id); setOpen(false) }}
       align="end"
       portal
+      className={css.selectorWrap}
       anchor={(
         <button
           type="button"
