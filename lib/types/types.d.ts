@@ -20,12 +20,20 @@ export interface TeamTask {
     /** What needs to be done. */
     description?: string;
     status: TaskStatus;
-    /** Member name the task is assigned to; unassigned tasks await a claim. */
+    /** Member name (or `captain`) the task is assigned to; unassigned tasks await a claim. */
     assignee?: string;
     /** Task ids that must reach `completed` before this task can be claimed. */
     dependencies: string[];
     /** The worker's written result, set when the task completes or fails. */
     output?: string;
+    /** Monotonic execution generation; a handoff invalidates every earlier attempt. */
+    attempt?: number;
+    /** Capability required to update the task's current execution attempt. */
+    attemptId?: string;
+    /** Opaque generation used while the old owner is being quiesced. */
+    handoffId?: string;
+    /** The scheduler must not dispatch a task while its previous owner is stopping. */
+    reassigning?: boolean;
     createdAt: number;
     updatedAt: number;
 }
@@ -39,7 +47,9 @@ export interface TeamMember {
     name: string;
     /** Role description, e.g. `researcher`, `engineer`, `reviewer`. */
     role?: string;
-    /** Optional model override for this member. */
+    /** Resolved LLM provider route captured when this member was created. */
+    provider?: string;
+    /** Resolved model captured when this member was created. */
     model?: string;
     /** Optional reasoning effort injected on the member's requests (off/high/max). */
     reasoningEffort?: string;
@@ -67,6 +77,12 @@ export interface TeamMessage {
     to: string;
     content: string;
     ts: number;
+    /** Process-local delivery lease that prevents concurrent fallback delivery. */
+    deliveryClaimedAt?: number;
+    /** Timestamp recorded after a live inbox accepts this message. */
+    deliveredAt?: number;
+    /** Timestamp recorded after the recipient consumes the durable fallback. */
+    readAt?: number;
 }
 /** The full durable team record. */
 export interface TeamState {

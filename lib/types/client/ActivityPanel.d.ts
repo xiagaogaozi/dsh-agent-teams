@@ -6,7 +6,7 @@
  * conversation column yield space; narrow viewports keep overlay mode. It
  * polls the host `/plugins/dsh-agent-teams/state` route for
  * server-side snapshots (durable files + live subagent activity), with a
- * collapsed badge that auto-expands once when activity appears. Archived
+ * collapsed badge that stays collapsed until manually clicked. Archived
  * teams stay available for the owning conversation after live work ends.
  *
  * The floater mounts through a body portal (no top-right slot exists in the
@@ -21,6 +21,7 @@ export interface ActivityMember {
     readonly id: string;
     readonly name: string;
     readonly role: string;
+    readonly status?: 'idle' | 'working' | 'removed';
     readonly activity: 'working' | 'idle' | 'unknown';
     readonly progress: number;
     readonly done: number;

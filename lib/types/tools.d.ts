@@ -23,9 +23,9 @@ export interface ToolsConfig {
     memberMaxDepth?: number;
     /** Team size cap (members). */
     maxMembers: number;
-    /** Default agent-preset id mounted on members (per-member `preset` wins). */
+    /** Default agent preset mounted on members without an explicit preset. */
     memberPreset?: string;
-    /** Synchronous reader of the member-profile library. */
+    /** Synchronous reader for the member-template library. */
     loadProfiles: () => MemberProfile[];
 }
 /**

@@ -13,13 +13,14 @@
  */
 
 import type { Context } from '@deepseek-ai/cordis'
-import type { Agent } from '@deepseek-ai/dsh-agent'
-// Declaration merge only: makes ctx.subagents visible.
-import type {} from '@deepseek-ai/dsh-subagent'
-// Declaration merge only: makes ctx.agentPresets visible.
+import { installModelSelection, type Agent, type ModelSelection } from '@deepseek-ai/dsh-agent'
 import type {} from '@deepseek-ai/dsh-agent-presets'
+// Declaration merge only: makes ctx.subagents visible.
+import { foldSubagentDescriptor, SubagentError } from '@deepseek-ai/dsh-subagent'
 import { ReasoningEffortId } from '@deepseek-ai/dsh-llm'
 import type { SessionId } from '@deepseek-ai/dsh-session'
+import { join } from 'node:path'
+import { readRetiredMemberIds, readTeamSync } from './state.ts'
 import type { TeamMember, TeamState } from './types.ts'
 
 /** Captain-only AgentTeams tools hidden from newly spawned members. */
@@ -27,19 +28,10 @@ const MEMBER_DENIED_TOOLS = [
   'agent_teams_create',
   'agent_teams_add_member',
   'agent_teams_remove_member',
+  'agent_teams_reassign_task',
   'agent_teams_create_task',
   'agent_teams_delete',
 ] as const
-
-/**
- * Split a `provider/model` spec into its route parts. A bare model id keeps
- * the captain's provider; an explicit provider must not depend on it.
- */
-function splitModelSpec(spec: string): { provider?: string; model: string } {
-  const slash = spec.indexOf('/')
-  if (slash > 0) return { provider: spec.slice(0, slash), model: spec.slice(slash + 1) }
-  return { model: spec }
-}
 
 /**
  * Restore the SessionId brand on a value that round-tripped through the
@@ -55,49 +47,231 @@ function brandedSessionId(value: string): SessionId {
 export interface MemberRuntimeConfig {
   /** Registered `ctx.subagents` provider name (must support continuable + persona). */
   provider: string
-  /** Optional model override applied to every member. */
-  model?: string
   /** Child delegation depth cap (0 forbids delegation entirely). */
   maxDepth?: number
-  /** Default agent-preset id mounted on members that do not specify one. */
+  /** Default preset mounted when the member does not choose one explicitly. */
   preset?: string
 }
 
+/** Durable provider/model/reasoning snapshot for one member. */
+export interface MemberLlmSelection {
+  /** Registered LLM provider route. */
+  provider: string
+  /** Provider-owned model id. */
+  model: string
+  /** Adapter-owned reasoning effort, absent when the target has no explicit/default effort. */
+  reasoningEffort?: string
+}
+
+/** Optional member-level route requested by the captain. */
+export interface MemberLlmSelectionRequest {
+  /** Explicit LLM provider route; requires an explicit model. */
+  provider?: string
+  /** Explicit model id; otherwise the plugin default or captain model is used. */
+  model?: string
+  /** Plugin-level member model default. */
+  defaultModel?: string
+}
+
+/** Process-local bridge between spawn admission and synchronous child setup. */
+export interface MemberSelectionRuntime {
+  /** Make one selection visible while Harness materializes the fresh child. */
+  withPending<T>(
+    parentSessionId: string,
+    label: string,
+    selection: MemberLlmSelection,
+    operation: () => Promise<T>,
+  ): Promise<T>
+}
+
+const MEMBER_LABEL_PREFIX = 'agent-teams:'
+
+function pendingSelectionKey(parentSessionId: string, label: string): string {
+  return `${parentSessionId}\u0000${label}`
+}
+
+function selectionFromMember(member: TeamMember | undefined): MemberLlmSelection | undefined {
+  if (member?.provider === undefined || member.model === undefined) return undefined
+  const provider = member.provider.trim()
+  const model = member.model.trim()
+  if (provider === '' || model === '') return undefined
+  const reasoningEffort = member.reasoningEffort?.trim()
+  return {
+    provider,
+    model,
+    ...reasoningEffort === undefined || reasoningEffort === '' ? {} : { reasoningEffort },
+  }
+}
+
+function modelSelection(selection: MemberLlmSelection): ModelSelection {
+  return {
+    provider: selection.provider,
+    model: selection.model,
+    ...selection.reasoningEffort === undefined
+      ? {}
+      : { reasoningEffort: ReasoningEffortId(selection.reasoningEffort) },
+  }
+}
+
 /**
- * The team tool protocol appended after any custom member persona. It is
- * deliberately kept free of role-play semantics: members may replace their
- * persona entirely, but still need to know how to collaborate on tasks.
+ * Resolve one member's complete model selection. Ordinary members snapshot the
+ * captain's current request route and reasoning effort. An explicit member
+ * provider/model or plugin-level model replaces only that route; the current
+ * captain effort remains the inherited policy and is validated against the
+ * target model before a child is created.
  */
-function teamPlumbing(team: TeamState, member: TeamMember, stateDir: string): string {
-  return `--- Team tool protocol (mechanical; do not role-play this section) ---
-- You are a member of the team "${team.name}" (team id: ${team.id}); your team name is ${member.name} (use it as \`from\`/identity).
-- Team state lives under ${stateDir}/${team.id}/ (team.json and inbox/*.jsonl). You may inspect these files read-only for diagnostics, but never edit them directly; use the agent_teams_* tools so JSON escaping and concurrent updates stay safe.
-- The captain and your teammates reach you through messages. Each message you receive is a new turn: act on it and end your turn with a concise reply.
-- When the captain assigns you a task: claim it with agent_teams_claim_task, mark it agent_teams_update_task (status=in_progress) while working, and complete it with agent_teams_update_task (status=completed) plus a concise \`output\` when done. Report blockers to the captain with agent_teams_send_message (to=captain).
-- To ask a teammate something, use agent_teams_send_message with to=<teammate name>; teammates talk to each other without the captain in the loop.
-- You are a worker: do not create or delete teams, and do not add or remove members — that is the captain's job.`
+export async function resolveMemberLlmSelection(
+  ctx: Context,
+  captain: Agent,
+  request: MemberLlmSelectionRequest,
+  signal?: AbortSignal,
+): Promise<MemberLlmSelection> {
+  const explicitProvider = request.provider?.trim()
+  const explicitModel = request.model?.trim()
+  const defaultModel = request.defaultModel?.trim()
+  if (request.provider !== undefined && explicitProvider === '') {
+    throw new Error('member LLM provider must not be empty')
+  }
+  if (request.model !== undefined && explicitModel === '') {
+    throw new Error('member model must not be empty')
+  }
+  if (request.defaultModel !== undefined && defaultModel === '') {
+    throw new Error('configured memberModel must not be empty')
+  }
+  if (explicitProvider !== undefined && explicitModel === undefined) {
+    throw new Error('an explicit member LLM provider requires an explicit member model')
+  }
+
+  const current = captain.session.requestHeader()?.config
+  const provider = explicitProvider ?? current?.provider ?? captain.options.provider
+  const model = explicitModel ?? defaultModel ?? current?.model ?? captain.options.model
+  if (provider === undefined || model === undefined) {
+    throw new Error('cannot resolve the member LLM route from the current captain session')
+  }
+
+  const resolved = await ctx.llm.resolveCallConfig({
+    provider,
+    model,
+    ...current?.reasoningEffort === undefined
+      ? {}
+      : { reasoningEffort: current.reasoningEffort },
+  }, signal)
+  return {
+    provider: resolved.provider,
+    model: resolved.model,
+    ...resolved.reasoningEffort === undefined
+      ? {}
+      : { reasoningEffort: String(resolved.reasoningEffort) },
+  }
+}
+
+/**
+ * Install the member selection bridge for every fresh or cold-resumed
+ * continuable child. Fresh creation reads the pending in-memory selection;
+ * cold resume restores the same selection from the owning team's durable
+ * record. Legacy members without a complete saved route retain Harness's
+ * descriptor provider/model behavior.
+ */
+export function installMemberSelectionRuntime(ctx: Context, stateDir: string): MemberSelectionRuntime {
+  const pending = new Map<string, MemberLlmSelection>()
+  ctx.subagents.registerContinuableSetup((childCtx) => {
+    const child = childCtx.agent
+    if (child === undefined) return () => undefined
+    const suffix = child.session.events.slice(child.session.header.seedLength ?? 0)
+    const descriptor = foldSubagentDescriptor(suffix)
+    if (descriptor?.mode !== 'continuable' || !descriptor.label.startsWith(MEMBER_LABEL_PREFIX)) {
+      return () => undefined
+    }
+
+    const parentSessionId = child.session.header.parentSession
+    if (parentSessionId === undefined) return () => undefined
+    const key = pendingSelectionKey(parentSessionId, descriptor.label)
+    let selection = pending.get(key)
+    if (selection === undefined) {
+      const identity = descriptor.label.slice(MEMBER_LABEL_PREFIX.length)
+      const separator = identity.indexOf(':')
+      if (separator < 1 || separator === identity.length - 1) return () => undefined
+      const teamId = identity.slice(0, separator)
+      const memberName = identity.slice(separator + 1)
+      const workspace = child.session.header.cwd ?? process.cwd()
+      const team = readTeamSync(join(workspace, stateDir), teamId)
+      if (team?.captainSessionId !== parentSessionId) return () => undefined
+      selection = selectionFromMember(team.members.find(member => member.name === memberName))
+      // An old team record has no provider/reasoning snapshot. Its durable
+      // Harness descriptor still restores provider/model, so leave it alone.
+      if (selection === undefined) return () => undefined
+      if (descriptor.agentProvider !== selection.provider || descriptor.agentModel !== selection.model) {
+        throw new Error(
+          `agent-teams: saved model route for member "${memberName}" does not match its subagent descriptor`,
+        )
+      }
+    }
+
+    return installModelSelection(childCtx, {
+      current: modelSelection(selection),
+      assembled: undefined,
+    })
+  })
+
+  return {
+    async withPending<T>(
+      parentSessionId: string,
+      label: string,
+      selection: MemberLlmSelection,
+      operation: () => Promise<T>,
+    ): Promise<T> {
+      const key = pendingSelectionKey(parentSessionId, label)
+      if (pending.has(key)) {
+        throw new Error(`member model selection is already pending for "${label}"`)
+      }
+      pending.set(key, selection)
+      try {
+        return await operation()
+      } finally {
+        pending.delete(key)
+      }
+    },
+  }
 }
 
 /**
  * The member's system prompt (persona), shadowing the deployment persona for
- * that child. A custom `member.persona` replaces the default template
- * entirely (the team tool protocol is still appended); otherwise the default
- * member persona applies. Self-contained: it replaces the whole persona
- * section.
+ * that child. Self-contained: it replaces the whole persona section.
  * @param team - the team the member joined.
  * @param member - the member record (name/role are read before spawning).
  * @param stateDir - configured state directory, so the member can locate the
  *   team files with its own file tools.
  */
+function customPersonaProtocol(team: TeamState, member: TeamMember, stateDir: string): string {
+  return `--- AgentTeams execution rules ---
+- You are ${member.name} in team "${team.name}" (team id: ${team.id}).
+- Inspect ${stateDir}/${team.id}/ only for diagnostics. Change tasks and mailboxes only through agent_teams_* tools.
+- For each assigned task, use the current attempt_id from agent_teams_claim_task in every update. A stale-attempt error means the task was reassigned: stop work and await new instructions.
+- Report results or blockers to the captain. Do not create/delete teams, reassign tasks, or add/remove members.`
+}
+
 export function memberPersona(team: TeamState, member: TeamMember, stateDir: string): string {
-  if (member.persona !== undefined) {
+  if (member.persona !== undefined && member.persona.trim() !== '') {
     return `${member.persona}
 
-${teamPlumbing(team, member, stateDir)}`
+${customPersonaProtocol(team, member, stateDir)}`
   }
   return `You are ${member.name}, a member of the multi-agent team "${team.name}" running inside DeepSeek Harness AgentTeams. The captain leads the team; you are a worker member${member.role ? ` with the role: ${member.role}` : ''}.
 
-${teamPlumbing(team, member, stateDir)}`
+Team context:
+- Team id: ${team.id}
+- Your name inside the team (use it as \`from\`/identity): ${member.name}
+- The team state lives under ${stateDir}/${team.id}/ (team.json and inbox/*.jsonl). You may inspect these files read-only for diagnostics, but never edit them directly; use the agent_teams_* tools so JSON escaping and concurrent updates stay safe.
+- The captain and your teammates reach you through messages. Each message you receive is a new turn: act on it and end your turn with a concise reply.
+
+Working rules:
+1. When you receive a task assignment, call agent_teams_claim_task with the task id. Keep the returned attempt_id: include it in every agent_teams_update_task call for that execution attempt. Then mark the task in_progress.
+2. Work thoroughly with your available tools; do not cut corners.
+3. When finished, call agent_teams_update_task with the same attempt_id, status=completed, and a concise \`output\` summarizing what you did and the key results. A stale-attempt rejection means the captain reassigned or took over the task; stop touching that task and wait for new work.
+4. Send a short report to the captain with agent_teams_send_message (to=captain) when you complete a task or hit a blocker.
+5. To ask a teammate something, use agent_teams_send_message with to=<teammate name>; the message lands in their mailbox and wakes them directly — teammates talk to each other without the captain in the loop. The same applies to the captain (to=captain).
+6. After your turn becomes idle, the shared task scheduler may assign your next ready task automatically. Never claim a second task while you still own unfinished work.
+7. You are a worker: do not create or delete teams, reassign tasks, or add/remove members — that is the captain's job.`
 }
 
 /**
@@ -113,6 +287,8 @@ export function memberWelcome(team: TeamState): string {
  * `member.id` with its child session id. On failure nothing is persisted.
  * @param ctx - the plugin context (injects `subagents`).
  * @param config - member runtime knobs.
+ * @param selections - fresh/cold child model-selection bridge.
+ * @param llmSelection - resolved provider/model/reasoning snapshot.
  * @param captain - the exact live captain agent (the calling agent).
  * @param team - the team record (read-only here).
  * @param member - the member draft whose `id` is filled on success.
@@ -122,6 +298,8 @@ export function memberWelcome(team: TeamState): string {
 export async function spawnMember(
   ctx: Context,
   config: MemberRuntimeConfig,
+  selections: MemberSelectionRuntime,
+  llmSelection: MemberLlmSelection,
   captain: Agent,
   team: TeamState,
   member: TeamMember,
@@ -147,101 +325,39 @@ export async function spawnMember(
   if (!provider.capabilities.toolFilter) {
     throw new Error(`agent-teams: provider "${config.provider}" cannot restrict captain-only tools for members`)
   }
-  const start = await ctx.subagents.startContinuable({
-    provider: config.provider,
-    label: `agent-teams:${team.id}:${member.name}`,
-    request: {
-      prompt: [{ type: 'text', text: memberWelcome(team) }],
-      parent: captain,
-      persona: memberPersona(team, member, stateDir),
-      toolFilter: { deny: [...MEMBER_DENIED_TOOLS] },
-      ...config.model !== undefined ? { agentOptions: splitModelSpec(config.model) } : {},
-      ...config.maxDepth !== undefined ? { maxDepth: config.maxDepth } : {},
-    },
-    signal,
-  })
+  const label = `${MEMBER_LABEL_PREFIX}${team.id}:${member.name}`
+  const start = await selections.withPending(captain.id, label, llmSelection, () => (
+    ctx.subagents.startContinuable({
+      provider: config.provider,
+      label,
+      request: {
+        prompt: [{ type: 'text', text: memberWelcome(team) }],
+        parent: captain,
+        persona: memberPersona(team, member, stateDir),
+        toolFilter: { deny: [...MEMBER_DENIED_TOOLS] },
+        agentOptions: {
+          provider: llmSelection.provider,
+          model: llmSelection.model,
+        },
+        ...config.maxDepth !== undefined ? { maxDepth: config.maxDepth } : {},
+      },
+      signal,
+    })
+  ))
   member.id = start.childId
-  // Resolve the live child agent once: preset mounting and reasoning-effort
-  // injection both need its scoped context. Only in-process providers
-  // register their children in the `agents` service, so out-of-process
-  // providers (codex/claude/acp) reject preset/effort requests loud and early.
-  const child = member.preset !== undefined || config.preset !== undefined || member.reasoningEffort !== undefined
-    ? ctx.agents.get(brandedSessionId(start.childId))
-    : undefined
-  // Mount an independent agent preset on the member when one is requested
-  // (per-member `preset` wins over the plugin-level `memberPreset` default).
-  // The child runs on the captain's preset by inheritance; recompose swaps
-  // that composition for the requested preset's tools, prompt sections, skills
-  // and persona for this member alone.
   const presetId = member.preset ?? config.preset
-  if (presetId !== undefined) {
-    if (child === undefined) {
-      throw new Error(
-        `agent-teams: preset "${presetId}" for member "${member.name}" requires an in-process `
-        + `subagent provider (the child is not registered in the agents service)`,
-      )
-    }
-    try {
-      await ctx.agentPresets.recompose(child.ctx, presetId)
-      // The durable commit point, mirroring the harness's own preset switch
-      // (api-proxy select): recompose swaps the live composition, and the
-      // `agent-preset/selected` session event persists the choice so a
-      // resumed/restored child remounts THIS preset instead of the inherited
-      // one recorded at creation.
-      child.session.append('agent-preset/selected', { agentPreset: presetId })
-    } catch (error: unknown) {
-      throw new Error(
-        `agent-teams: failed to mount preset "${presetId}" on member "${member.name}": ${String(error)}`,
-      )
-    }
+  if (presetId === undefined || presetId === '') return
+  const child = ctx.agents.get(brandedSessionId(start.childId))
+  if (child === undefined) {
+    throw new Error(
+      `agent-teams: preset "${presetId}" for member "${member.name}" requires an in-process subagent provider`,
+    )
   }
-  // Inject the member's reasoning effort on every one of its model requests.
-  // AgentOptions carries no effort, so mirror the harness's own selection
-  // mechanism (installModelSelection): a scoped `agent/request` waterfall on
-  // the child's context folds the effort into its resolved call config. Only
-  // when the member's effective model actually supports that effort — a model
-  // without reasoning metadata rejects an injected effort at the adapter.
-  if (member.reasoningEffort !== undefined && member.reasoningEffort !== '') {
-    if (child === undefined) {
-      throw new Error(
-        `agent-teams: reasoningEffort for member "${member.name}" requires an in-process `
-        + `subagent provider (the child is not registered in the agents service)`,
-      )
-    }
-    if (await supportsEffort(ctx, member.model, config.model, captain, member.reasoningEffort)) {
-      child.ctx.on('agent/request', async (_payload, next) => {
-        const resolved = await next()
-        return { ...resolved, reasoningEffort: ReasoningEffortId(member.reasoningEffort!) }
-      })
-    }
-  }
-}
-
-/**
- * Whether the member's effective model supports the requested reasoning
- * effort. The route resolves from the member's `provider/model` spec, falling
- * back to the plugin-level memberModel and then the captain's own route.
- */
-async function supportsEffort(
-  ctx: Context,
-  memberModel: string | undefined,
-  configModel: string | undefined,
-  captain: Agent,
-  effort: string,
-): Promise<boolean> {
-  const llm = ctx.get('llm')
-  if (llm === undefined) return false
-  const spec = memberModel ?? configModel
-  const route = spec !== undefined && spec.includes('/')
-    ? { provider: spec.slice(0, spec.indexOf('/')), model: spec.slice(spec.indexOf('/') + 1) }
-    : { provider: captain.options.provider, model: spec ?? captain.options.model }
-  if (route.provider === undefined || route.model === undefined) return false
   try {
-    const info = await llm.resolveModelInfo(route.provider, route.model)
-    const efforts = info.reasoning?.efforts ?? []
-    return efforts.some((candidate) => candidate.id === effort)
-  } catch {
-    return false
+    await ctx.agentPresets.recompose(child.ctx, presetId)
+    child.session.append('agent-preset/selected', { agentPreset: presetId })
+  } catch (error: unknown) {
+    throw new Error(`agent-teams: failed to mount preset "${presetId}" on member "${member.name}": ${String(error)}`)
   }
 }
 
@@ -296,10 +412,73 @@ export function interruptMember(ctx: Context, captain: Agent, childId: string): 
   }
 }
 
+/** Resolve one live parent's workspace-scoped retirement index. */
+async function retiredForParent(ctx: Context, parentId: SessionId, stateDir: string): Promise<Set<string>> {
+  const parent = ctx.agents.get(parentId)
+  return parent === undefined
+    ? new Set()
+    : readRetiredMemberIds(join(parent.session.header.cwd ?? process.cwd(), stateDir))
+}
+
 /**
- * Snapshot each direct continuable child's activity under the captain's
- * session, keyed by child session id. A member that is currently running its
- * turn reports `running`; an idle member reports `inactive`.
+ * Install the missing per-child retirement boundary above Harness rc.6.
+ *
+ * Upstream `interrupt()` deliberately preserves continuable sessions and the
+ * upstream seam exposes no targeted forget/retire method. The durable
+ * AgentTeams index therefore guards all three public continuation boundaries:
+ * retired rows disappear from `list_agents` (children and descendants), and a
+ * direct `followup()` is rejected before it can cold-resume the member. Exact
+ * ids keep unrelated subagents untouched; transcripts remain in persistence
+ * for archived-team review.
+ */
+export function installRetiredMemberGuard(ctx: Context, stateDir: string): void {
+  const runtime = ctx.subagents
+  ctx.effect(() => {
+    const listChildren = runtime.listChildren
+    const listDescendants = runtime.listDescendants
+    const followup = runtime.followup
+
+    const guardedChildren: typeof runtime.listChildren = async (parentId, signal) => {
+      const [entries, retired] = await Promise.all([
+        listChildren.call(runtime, parentId, signal),
+        retiredForParent(ctx, parentId, stateDir),
+      ])
+      return entries.filter(entry => !retired.has(entry.id))
+    }
+    const guardedDescendants: typeof runtime.listDescendants = async (rootId, signal) => {
+      const [entries, retired] = await Promise.all([
+        listDescendants.call(runtime, rootId, signal),
+        retiredForParent(ctx, rootId, stateDir),
+      ])
+      return entries.filter(entry => !retired.has(entry.id))
+    }
+    const guardedFollowup: typeof runtime.followup = async (parent, childId, content, options) => {
+      const retired = await readRetiredMemberIds(join(parent.session.header.cwd ?? process.cwd(), stateDir))
+      if (retired.has(childId)) {
+        throw new SubagentError(
+          `AgentTeams member "${childId}" was retired and cannot be resumed`,
+          'NOT_RESUMABLE',
+        )
+      }
+      return followup.call(runtime, parent, childId, content, options)
+    }
+
+    runtime.listChildren = guardedChildren
+    runtime.listDescendants = guardedDescendants
+    runtime.followup = guardedFollowup
+    return () => {
+      if (runtime.listChildren === guardedChildren) runtime.listChildren = listChildren
+      if (runtime.listDescendants === guardedDescendants) runtime.listDescendants = listDescendants
+      if (runtime.followup === guardedFollowup) runtime.followup = followup
+    }
+  }, 'agent-teams: retired member guard')
+}
+
+/**
+ * Snapshot each direct continuable child's real driver activity under the
+ * captain's session. `listChildren().activity` is only session residency, so
+ * live children are refined through the Agent registry exactly like Harness's
+ * shipped `list_agents` tool.
  * @param ctx - the plugin context (injects `subagents`).
  * @param captainSessionId - the captain's session id.
  * @returns child id → activity, missing entries are unknown children.
@@ -307,11 +486,13 @@ export function interruptMember(ctx: Context, captain: Agent, childId: string): 
 export async function memberActivity(
   ctx: Context,
   captainSessionId: string,
-): Promise<Map<string, 'running' | 'inactive'>> {
+): Promise<Map<string, 'running' | 'idle' | 'ready'>> {
   const entries = await ctx.subagents.listChildren(brandedSessionId(captainSessionId))
-  const activity = new Map<string, 'running' | 'inactive'>()
+  const activity = new Map<string, 'running' | 'idle' | 'ready'>()
   for (const entry of entries) {
-    if (entry.kind === 'child') activity.set(entry.id, entry.activity)
+    if (entry.kind !== 'child') continue
+    const live = ctx.agents.get(entry.id)
+    activity.set(entry.id, live === undefined ? 'ready' : live.status)
   }
   return activity
 }

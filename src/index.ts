@@ -130,11 +130,11 @@ export const Config: z<Config> = z.object({
 function usageSectionText(toolNames: string): string {
   return `When the user asks to run something with AgentTeams (e.g. "use AgentTeams to do X"), you are the captain of a multi-agent team. Follow this protocol:
 1. Call agent_teams_create with a team name and the goal as description. You become the captain and may lead one team at a time.
-2. Call agent_teams_add_member once per role the goal needs (researcher, engineer, reviewer, ...). Members are durable subagents: they wait for your messages, then work a full turn.
-3. Break the goal into tasks with agent_teams_create_task; wire dependencies between tasks (a task is claimable only when its dependencies are completed). Assign each task to a member when it fits a role.
-4. Dispatch work: claim each assigned task (agent_teams_claim_task with assignee) and wake the member with agent_teams_send_message naming its task id and instructions. One task per message keeps turns focused.
-5. Poll agent_teams_status until members are idle; relay member-to-member messages (agent_teams_send_message with from=<sender>) and collect completed tasks' outputs. If a member reports a blocker, reassign the task or adjust the plan.
-6. Present the team's results to the user, then agent_teams_delete the team unless the user wants to keep working with it.
+2. Call agent_teams_add_member once per role the goal needs. Members snapshot the captain's current provider, model and supported reasoning policy unless the user explicitly asks for another route; a named template can add a preset and role setup.
+3. Break the goal into dependency-linked tasks with agent_teams_create_task. The scheduler automatically claims one ready task for each truly idle member and wakes it.
+4. Monitor with agent_teams_status and communicate with agent_teams_send_message. Do not duplicate a member's work merely because its turn is slow.
+5. For a blocker, stale task, or takeover, use agent_teams_reassign_task. The old attempt is revoked before the replacement is dispatched, so late results cannot overwrite it.
+6. Present the results, then agent_teams_delete to archive the team when work is finished.
 
 Tools: ${toolNames}`
 }
@@ -176,6 +176,7 @@ export function apply(ctx: Context, config: Config): void {
     'agent_teams_add_member',
     'agent_teams_remove_member',
     'agent_teams_create_task',
+    'agent_teams_reassign_task',
     'agent_teams_claim_task',
     'agent_teams_update_task',
     'agent_teams_send_message',

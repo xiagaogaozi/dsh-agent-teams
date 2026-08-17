@@ -1,6 +1,6 @@
 {
   "name": "@nanmicoder/dsh-agent-teams",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "description": "AgentTeams for DeepSeek Harness: multi-agent team collaboration (captain, members, tasks with dependencies, messaging) driven by natural language, with a tree monitor in the web GUI",
   "type": "module",
   "main": "lib/index.js",
@@ -80,7 +80,7 @@
     "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p tsconfig.client.json --noEmit",
     "sync:skill": "node scripts/sync-skill.mjs",
     "verify:skill": "node scripts/sync-skill.mjs --check",
-    "verify": "node scripts/verify.mjs && pnpm verify:skill",
+    "verify": "node scripts/verify.mjs && node scripts/lifecycle-verify.mjs && node scripts/stress-verify.mjs && pnpm verify:skill",
     "prepublishOnly": "pnpm build && pnpm verify"
   },
   "dependencies": {},

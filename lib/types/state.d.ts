@@ -61,6 +61,15 @@ export declare const TASK_TRANSITIONS: Readonly<Record<TaskStatus, readonly Task
  * @returns the transition error, or undefined when allowed.
  */
 export declare function transitionError(current: TaskStatus, next: TaskStatus): string | undefined;
+/** Activate the task's current generation for one owner and return its capability id. */
+export declare function activateTaskAttempt(task: TeamTask, assignee: string): string;
+/** Start a fresh task generation for one owner. */
+export declare function beginTaskAttempt(task: TeamTask, assignee: string): string;
+/**
+ * Revoke the current worker immediately. Clearing its capability makes old
+ * updates stale; a separate handoff generation serializes async quiescence.
+ */
+export declare function invalidateTaskAttempt(task: TeamTask, nextAssignee?: string, reassigning?: boolean): void;
 /**
  * Create the team directory structure and the initial team record.
  * @param stateRoot - resolved absolute state root directory.
@@ -74,11 +83,25 @@ export declare function createTeamDir(stateRoot: string, state: TeamState): Prom
  */
 export declare function readTeam(stateRoot: string, teamId: string): Promise<TeamState | undefined>;
 /**
+ * Synchronously read one team record while a continuable child is being
+ * composed. Harness requires child setup contributions to be synchronous;
+ * this narrow boundary lets a cold-resumed member restore its durable model
+ * selection before its first request can be published.
+ * @param stateRoot - resolved absolute state root directory.
+ * @param teamId - the team's sanitized id.
+ * @returns the team record, or `undefined` when absent.
+ */
+export declare function readTeamSync(stateRoot: string, teamId: string): TeamState | undefined;
+/**
  * Persist one team record (inside the caller's lock).
  * @param stateRoot - resolved absolute state root directory.
  * @param state - the record to persist.
  */
 export declare function writeTeam(stateRoot: string, state: TeamState): Promise<void>;
+/** Read the durable set of member session ids retired by remove/delete. */
+export declare function readRetiredMemberIds(stateRoot: string): Promise<Set<string>>;
+/** Atomically add session ids to the durable retired-member deny-list. */
+export declare function recordRetiredMemberIds(stateRoot: string, memberIds: readonly string[]): Promise<void>;
 /**
  * Find the team owned by one captain session (at most one per captain).
  * @param stateRoot - resolved absolute state root directory.
@@ -115,6 +138,17 @@ export declare function appendMailbox(stateRoot: string, teamId: string, agentKe
  * @returns the messages, empty when the mailbox does not exist yet.
  */
 export declare function readMailbox(stateRoot: string, teamId: string, agentKey: string, onMalformedLine?: (lineNumber: number, error: unknown) => void): Promise<TeamMessage[]>;
+/** Read only messages that have not been acknowledged by their recipient. */
+export declare function readUnreadMailbox(stateRoot: string, teamId: string, agentKey: string, onMalformedLine?: (lineNumber: number, error: unknown) => void): Promise<TeamMessage[]>;
+/** Lease selected fallback messages to one delivery path. */
+export declare function claimMailboxDelivery(stateRoot: string, teamId: string, agentKey: string, messageIds: readonly string[]): Promise<void>;
+/** Release a failed delivery lease so the scheduler can retry it later. */
+export declare function releaseMailboxDelivery(stateRoot: string, teamId: string, agentKey: string, messageIds: readonly string[]): Promise<void>;
+/**
+ * Mark selected durable mailbox records delivered/read while preserving
+ * malformed lines for diagnostics. Callers serialize this with the team lock.
+ */
+export declare function acknowledgeMailbox(stateRoot: string, teamId: string, agentKey: string, messageIds: readonly string[]): Promise<void>;
 /**
  * Remove a team's whole directory (members should be interrupted first).
  * @param stateRoot - resolved absolute state root directory.

@@ -8,7 +8,7 @@
  * @module dsh-agent-teams/snapshot
  */
 import type { Context } from '@deepseek-ai/cordis';
-import type { TeamState } from './types.ts';
+import type { MemberStatus, TeamState } from './types.ts';
 /** Visual task state for the activity panel. */
 export type VisualTaskState = 'blocked' | 'open' | 'running' | 'completed';
 /** One member row of the activity snapshot. */
@@ -16,6 +16,7 @@ export interface TeamActivityMember {
     readonly id: string;
     readonly name: string;
     readonly role: string;
+    readonly status: MemberStatus;
     readonly activity: 'working' | 'idle' | 'unknown';
     readonly progress: number;
     readonly done: number;
@@ -50,6 +51,13 @@ export interface TeamActivitySnapshot {
     readonly messageCount: number;
     readonly captainInbox: readonly TeamActivityMessage[];
 }
+/** Snapshot projection switches for live and archived teams. */
+export interface TeamSnapshotOptions {
+    /** Historic review must retain members that were marked removed at shutdown. */
+    readonly includeRemoved?: boolean;
+    /** Archived teams have no meaningful live activity after their sessions stop. */
+    readonly historic?: boolean;
+}
 /**
  * Assemble one team snapshot from its durable files plus live activity.
  * @param ctx - the plugin context (injects `subagents`, used for activity).
@@ -58,7 +66,7 @@ export interface TeamActivitySnapshot {
  * @param state - the durable team record.
  * @returns the panel snapshot.
  */
-export declare function assembleTeamSnapshot(ctx: Context, stateRoot: string, workspace: string, state: TeamState): Promise<TeamActivitySnapshot>;
+export declare function assembleTeamSnapshot(ctx: Context, stateRoot: string, workspace: string, state: TeamState, options?: TeamSnapshotOptions): Promise<TeamActivitySnapshot>;
 /**
  * Collect every team under the given workspace state roots.
  * @param ctx - the plugin context.

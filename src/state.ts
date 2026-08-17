@@ -14,12 +14,17 @@
  */
 
 import { createHash, randomUUID } from 'node:crypto'
+import { readFileSync } from 'node:fs'
 import { mkdir, readFile, readdir, rename, rm, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import type { TaskStatus, TeamMember, TeamMessage, TeamState, TeamTask } from './types.ts'
 
 /** Mailbox key of the captain. */
 export const CAPTAIN_KEY = 'captain'
+/** A crashed live-delivery attempt becomes retryable after this interval. */
+const MAILBOX_DELIVERY_LEASE_MS = 60_000
+/** Durable deny-list for AgentTeams members that must never be resumed. */
+const RETIRED_MEMBERS_FILE = 'retired-members.json'
 
 /** In-process per-team mutation queues (promise chains). */
 const locks = new Map<string, Promise<unknown>>()
@@ -120,6 +125,43 @@ export function transitionError(current: TaskStatus, next: TaskStatus): string |
   return undefined
 }
 
+/** Activate the task's current generation for one owner and return its capability id. */
+export function activateTaskAttempt(task: TeamTask, assignee: string): string {
+  const attemptId = randomUUID()
+  task.status = 'claimed'
+  task.assignee = assignee
+  task.attemptId = attemptId
+  task.handoffId = undefined
+  task.reassigning = false
+  task.output = undefined
+  task.updatedAt = Date.now()
+  return attemptId
+}
+
+/** Start a fresh task generation for one owner. */
+export function beginTaskAttempt(task: TeamTask, assignee: string): string {
+  task.attempt = (task.attempt ?? 0) + 1
+  return activateTaskAttempt(task, assignee)
+}
+
+/**
+ * Revoke the current worker immediately. Clearing its capability makes old
+ * updates stale; a separate handoff generation serializes async quiescence.
+ */
+export function invalidateTaskAttempt(
+  task: TeamTask,
+  nextAssignee?: string,
+  reassigning = false,
+): void {
+  task.attemptId = undefined
+  task.handoffId = randomUUID()
+  task.status = 'pending'
+  task.assignee = nextAssignee
+  task.reassigning = reassigning
+  task.output = undefined
+  task.updatedAt = Date.now()
+}
+
 /**
  * Create the team directory structure and the initial team record.
  * @param stateRoot - resolved absolute state root directory.
@@ -153,12 +195,70 @@ export async function readTeam(stateRoot: string, teamId: string): Promise<TeamS
 }
 
 /**
+ * Synchronously read one team record while a continuable child is being
+ * composed. Harness requires child setup contributions to be synchronous;
+ * this narrow boundary lets a cold-resumed member restore its durable model
+ * selection before its first request can be published.
+ * @param stateRoot - resolved absolute state root directory.
+ * @param teamId - the team's sanitized id.
+ * @returns the team record, or `undefined` when absent.
+ */
+export function readTeamSync(stateRoot: string, teamId: string): TeamState | undefined {
+  try {
+    const raw = readFileSync(join(stateRoot, teamId, 'team.json'), 'utf8')
+    const value: unknown = JSON.parse(stripLeadingBom(raw))
+    if (!isTeamState(value, teamId)) {
+      throw new Error(`invalid AgentTeams state in team "${teamId}"`)
+    }
+    return value
+  } catch (error: unknown) {
+    if (error instanceof Error && 'code' in error && (error as NodeJS.ErrnoException).code === 'ENOENT') {
+      return undefined
+    }
+    throw error
+  }
+}
+
+/**
  * Persist one team record (inside the caller's lock).
  * @param stateRoot - resolved absolute state root directory.
  * @param state - the record to persist.
  */
 export async function writeTeam(stateRoot: string, state: TeamState): Promise<void> {
   await atomicWriteText(join(stateRoot, state.id, 'team.json'), JSON.stringify(state, null, 2))
+}
+
+/** Read the durable set of member session ids retired by remove/delete. */
+export async function readRetiredMemberIds(stateRoot: string): Promise<Set<string>> {
+  try {
+    const parsed: unknown = JSON.parse(stripLeadingBom(
+      await readFile(join(stateRoot, RETIRED_MEMBERS_FILE), 'utf8'),
+    ))
+    if (!Array.isArray(parsed) || parsed.some(value => typeof value !== 'string' || value === '')) {
+      throw new Error('invalid AgentTeams retired member index')
+    }
+    return new Set(parsed)
+  } catch (error: unknown) {
+    if (error instanceof Error && 'code' in error && (error as NodeJS.ErrnoException).code === 'ENOENT') {
+      return new Set()
+    }
+    throw error
+  }
+}
+
+/** Atomically add session ids to the durable retired-member deny-list. */
+export async function recordRetiredMemberIds(stateRoot: string, memberIds: readonly string[]): Promise<void> {
+  const additions = memberIds.filter(id => id !== '')
+  if (additions.length === 0) return
+  await withTeamLock(`retired-members:${stateRoot}`, async () => {
+    const retired = await readRetiredMemberIds(stateRoot)
+    for (const id of additions) retired.add(id)
+    await mkdir(stateRoot, { recursive: true })
+    await atomicWriteText(
+      join(stateRoot, RETIRED_MEMBERS_FILE),
+      `${JSON.stringify([...retired].sort(), null, 2)}\n`,
+    )
+  })
 }
 
 /**
@@ -307,6 +407,99 @@ export async function readMailbox(
   }
 }
 
+/** Read only messages that have not been acknowledged by their recipient. */
+export async function readUnreadMailbox(
+  stateRoot: string,
+  teamId: string,
+  agentKey: string,
+  onMalformedLine?: (lineNumber: number, error: unknown) => void,
+): Promise<TeamMessage[]> {
+  const now = Date.now()
+  return (await readMailbox(stateRoot, teamId, agentKey, onMalformedLine))
+    .filter(message => message.readAt === undefined
+      && (message.deliveryClaimedAt === undefined
+        || now - message.deliveryClaimedAt >= MAILBOX_DELIVERY_LEASE_MS))
+}
+
+async function mutateMailbox(
+  stateRoot: string,
+  teamId: string,
+  agentKey: string,
+  messageIds: readonly string[],
+  mutate: (message: TeamMessage) => TeamMessage,
+): Promise<void> {
+  if (messageIds.length === 0) return
+  const file = join(stateRoot, teamId, 'inbox', `${sanitizeKey(agentKey)}.jsonl`)
+  let raw: string
+  try {
+    raw = await readFile(file, 'utf8')
+  } catch (error: unknown) {
+    if (error instanceof Error && 'code' in error && (error as NodeJS.ErrnoException).code === 'ENOENT') return
+    throw error
+  }
+  const selected = new Set(messageIds)
+  const lines = raw.split('\n').map((rawLine) => {
+    const line = stripLeadingBom(rawLine)
+    if (line.trim() === '') return rawLine
+    try {
+      const value: unknown = JSON.parse(line)
+      if (!isTeamMessage(value) || !selected.has(value.id)) return rawLine
+      return JSON.stringify(mutate(value))
+    } catch {
+      return rawLine
+    }
+  })
+  await atomicWriteText(file, lines.join('\n'))
+}
+
+/** Lease selected fallback messages to one delivery path. */
+export async function claimMailboxDelivery(
+  stateRoot: string,
+  teamId: string,
+  agentKey: string,
+  messageIds: readonly string[],
+): Promise<void> {
+  const now = Date.now()
+  await mutateMailbox(stateRoot, teamId, agentKey, messageIds, message => ({
+    ...message,
+    deliveryClaimedAt: now,
+  }))
+}
+
+/** Release a failed delivery lease so the scheduler can retry it later. */
+export async function releaseMailboxDelivery(
+  stateRoot: string,
+  teamId: string,
+  agentKey: string,
+  messageIds: readonly string[],
+): Promise<void> {
+  await mutateMailbox(stateRoot, teamId, agentKey, messageIds, (message) => {
+    const { deliveryClaimedAt: _claimed, ...released } = message
+    return released
+  })
+}
+
+/**
+ * Mark selected durable mailbox records delivered/read while preserving
+ * malformed lines for diagnostics. Callers serialize this with the team lock.
+ */
+export async function acknowledgeMailbox(
+  stateRoot: string,
+  teamId: string,
+  agentKey: string,
+  messageIds: readonly string[],
+): Promise<void> {
+  const now = Date.now()
+  await mutateMailbox(stateRoot, teamId, agentKey, messageIds, (message) => {
+    const { deliveryClaimedAt: _claimed, ...rest } = message
+    return {
+      ...rest,
+      deliveredAt: message.deliveredAt ?? now,
+      readAt: message.readAt ?? now,
+    }
+  })
+}
+
 /** Remove the optional UTF-8 BOM some editors prepend to JSON text. */
 function stripLeadingBom(value: string): string {
   return value.charCodeAt(0) === 0xFEFF ? value.slice(1) : value
@@ -317,7 +510,18 @@ async function atomicWriteText(file: string, content: string): Promise<void> {
   const temporary = `${file}.${process.pid}.${randomUUID()}.tmp`
   try {
     await writeFile(temporary, content, { encoding: 'utf8', flag: 'wx' })
-    await rename(temporary, file)
+    for (let attempt = 0; ; attempt += 1) {
+      try {
+        await rename(temporary, file)
+        return
+      } catch (error: unknown) {
+        const code = error instanceof Error && 'code' in error
+          ? (error as NodeJS.ErrnoException).code
+          : undefined
+        if ((code !== 'EPERM' && code !== 'EBUSY') || attempt >= 4) throw error
+        await new Promise<void>(resolve => setTimeout(resolve, 8 * (attempt + 1)))
+      }
+    }
   } catch (error: unknown) {
     await rm(temporary, { force: true }).catch(() => undefined)
     throw error
@@ -346,7 +550,9 @@ function isTeamMember(value: unknown): value is TeamMember {
     && typeof value['name'] === 'string'
     && value['name'].trim() !== ''
     && isOptionalString(value['role'])
+    && isOptionalString(value['provider'])
     && isOptionalString(value['model'])
+    && isOptionalString(value['reasoningEffort'])
     && isFiniteNumber(value['joinedAt'])
     && (value['status'] === 'idle' || value['status'] === 'working' || value['status'] === 'removed')
 }
@@ -367,6 +573,11 @@ function isTeamTask(value: unknown): value is TeamTask {
     && Array.isArray(value['dependencies'])
     && value['dependencies'].every((dependency) => typeof dependency === 'string')
     && isOptionalString(value['output'])
+    && (value['attempt'] === undefined
+      || (Number.isSafeInteger(value['attempt']) && (value['attempt'] as number) >= 0))
+    && isOptionalString(value['attemptId'])
+    && isOptionalString(value['handoffId'])
+    && (value['reassigning'] === undefined || typeof value['reassigning'] === 'boolean')
     && isFiniteNumber(value['createdAt'])
     && isFiniteNumber(value['updatedAt'])
 }
@@ -415,6 +626,9 @@ function isTeamMessage(value: unknown): value is TeamMessage {
     && typeof value['to'] === 'string'
     && typeof value['content'] === 'string'
     && isFiniteNumber(value['ts'])
+    && (value['deliveryClaimedAt'] === undefined || isFiniteNumber(value['deliveryClaimedAt']))
+    && (value['deliveredAt'] === undefined || isFiniteNumber(value['deliveredAt']))
+    && (value['readAt'] === undefined || isFiniteNumber(value['readAt']))
 }
 
 /**
@@ -438,7 +652,38 @@ export async function removeTeamDir(stateRoot: string, teamId: string): Promise<
 export async function archiveTeamDir(stateRoot: string, teamId: string): Promise<void> {
   const archiveRoot = join(stateRoot, 'archive')
   await mkdir(archiveRoot, { recursive: true })
-  await rename(join(stateRoot, teamId), join(archiveRoot, teamId))
+  const source = join(stateRoot, teamId)
+  const target = join(archiveRoot, teamId)
+  const previous = join(archiveRoot, `.${teamId}.previous-${randomUUID()}`)
+  let displaced = false
+  try {
+    await rename(target, previous)
+    displaced = true
+  } catch (error: unknown) {
+    if (!(error instanceof Error && 'code' in error && (error as NodeJS.ErrnoException).code === 'ENOENT')) {
+      throw error
+    }
+  }
+
+  try {
+    await rename(source, target)
+  } catch (error: unknown) {
+    if (displaced) {
+      try {
+        await rename(previous, target)
+      } catch (restoreError: unknown) {
+        throw new AggregateError(
+          [error, restoreError],
+          `failed to archive team "${teamId}" and restore its previous archive`,
+        )
+      }
+    }
+    throw error
+  }
+
+  // The new generation is authoritative. A failed cleanup only leaves a
+  // hidden recovery directory, which archive discovery deliberately ignores.
+  if (displaced) await rm(previous, { recursive: true, force: true }).catch(() => undefined)
 }
 
 /**
@@ -459,7 +704,9 @@ export async function readArchivedTeam(stateRoot: string, teamId: string): Promi
 export async function listArchivedTeamIds(stateRoot: string): Promise<string[]> {
   try {
     const entries = await readdir(join(stateRoot, 'archive'), { withFileTypes: true })
-    return entries.filter((entry) => entry.isDirectory()).map((entry) => entry.name)
+    return entries
+      .filter((entry) => entry.isDirectory() && !entry.name.startsWith('.'))
+      .map((entry) => entry.name)
   } catch (error: unknown) {
     if (error instanceof Error && 'code' in error && (error as NodeJS.ErrnoException).code === 'ENOENT') {
       return []

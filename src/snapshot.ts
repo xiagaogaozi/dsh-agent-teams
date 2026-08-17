@@ -13,10 +13,10 @@ import type { SessionId } from '@deepseek-ai/dsh-session/types'
 import { readdir } from 'node:fs/promises'
 import { join } from 'node:path'
 import {
-  CAPTAIN_KEY, listArchivedTeamIds, readArchivedTeam, readMailbox, readTeam,
+  CAPTAIN_KEY, listArchivedTeamIds, readArchivedTeam, readUnreadMailbox, readTeam,
   taskDepthsById, taskVisualState,
 } from './state.ts'
-import type { TeamState, TeamTask } from './types.ts'
+import type { MemberStatus, TeamState, TeamTask } from './types.ts'
 
 /** Visual task state for the activity panel. */
 export type VisualTaskState = 'blocked' | 'open' | 'running' | 'completed'
@@ -26,6 +26,7 @@ export interface TeamActivityMember {
   readonly id: string
   readonly name: string
   readonly role: string
+  readonly status: MemberStatus
   readonly activity: 'working' | 'idle' | 'unknown'
   readonly progress: number
   readonly done: number
@@ -64,6 +65,14 @@ export interface TeamActivitySnapshot {
   readonly captainInbox: readonly TeamActivityMessage[]
 }
 
+/** Snapshot projection switches for live and archived teams. */
+export interface TeamSnapshotOptions {
+  /** Historic review must retain members that were marked removed at shutdown. */
+  readonly includeRemoved?: boolean
+  /** Archived teams have no meaningful live activity after their sessions stop. */
+  readonly historic?: boolean
+}
+
 /** The current task of a member: its first unfinished owned task. */
 function currentTaskOf(memberName: string, tasks: readonly TeamTask[]): string {
   for (const task of tasks) {
@@ -85,46 +94,61 @@ export async function assembleTeamSnapshot(
   stateRoot: string,
   workspace: string,
   state: TeamState,
+  options: TeamSnapshotOptions = {},
 ): Promise<TeamActivitySnapshot> {
   const tasks = state.tasks
   const depths = taskDepthsById(tasks)
-  const byName = new Map(state.members.filter((m) => m.status !== 'removed').map((m) => [m.name, m]))
-  const activity = new Map<string, 'running' | 'inactive'>()
-  try {
-    const children = await ctx.subagents.listChildren(state.captainSessionId as SessionId)
-    for (const entry of children) {
-      if (entry.kind === 'child') activity.set(entry.id, entry.activity)
+  const roster = options.includeRemoved === true
+    ? state.members
+    : state.members.filter((member) => member.status !== 'removed')
+  const activity = new Map<string, 'running' | 'idle' | 'ready'>()
+  if (options.historic !== true) {
+    try {
+      const children = await ctx.subagents.listChildren(state.captainSessionId as SessionId)
+      for (const entry of children) {
+        if (entry.kind === 'child') {
+          const live = ctx.agents.get(entry.id)
+          activity.set(entry.id, live === undefined ? 'ready' : live.status)
+        }
+      }
+    } catch (error: unknown) {
+      ctx.logger.warn(`agent-teams: activity listing failed for ${state.name}: ${String(error)}`)
     }
-  } catch (error: unknown) {
-    ctx.logger.warn(`agent-teams: activity listing failed for ${state.name}: ${String(error)}`)
   }
   const unreadByMember = new Map<string, number>()
-  for (const member of state.members.filter((candidate) => candidate.status !== 'removed')) {
+  for (const member of roster) {
     try {
-      unreadByMember.set(member.name, (await readMailbox(stateRoot, state.id, member.name)).length)
+      unreadByMember.set(member.name, (await readUnreadMailbox(stateRoot, state.id, member.name)).length)
     } catch (error: unknown) {
       ctx.logger.warn(`agent-teams: mailbox read failed for ${member.name}: ${String(error)}`)
       unreadByMember.set(member.name, 0)
     }
   }
-  const members: TeamActivityMember[] = state.members
-    .filter((member) => member.status !== 'removed')
-    .map((member) => {
-      const owned = tasks.filter((task) => task.assignee === member.name)
-      const done = owned.filter((task) => task.status === 'completed').length
-      return {
-        id: member.id,
-        name: member.name,
-        role: member.role ?? '',
-        activity: member.id !== '' ? (activity.get(member.id) === 'running' ? 'working' : activity.get(member.id) === 'inactive' ? 'idle' : 'unknown') : 'unknown',
-        progress: owned.length === 0 ? 0 : Math.round((done / owned.length) * 100),
-        done,
-        total: owned.length,
-        currentTask: currentTaskOf(member.name, tasks),
-        unread: unreadByMember.get(member.name) ?? 0,
-      }
-    })
-  const captainInbox = await readMailbox(stateRoot, state.id, CAPTAIN_KEY)
+  const members: TeamActivityMember[] = roster.map((member) => {
+    const owned = tasks.filter((task) => task.assignee === member.name)
+    const done = owned.filter((task) => task.status === 'completed').length
+    return {
+      id: member.id,
+      name: member.name,
+      role: member.role ?? '',
+      status: member.status,
+      activity: options.historic === true
+        ? 'idle'
+        : member.id !== ''
+          ? (activity.get(member.id) === 'running'
+              ? 'working'
+              : activity.get(member.id) === 'idle' || activity.get(member.id) === 'ready'
+                ? 'idle'
+                : 'unknown')
+          : 'unknown',
+      progress: owned.length === 0 ? 0 : Math.round((done / owned.length) * 100),
+      done,
+      total: owned.length,
+      currentTask: currentTaskOf(member.name, tasks),
+      unread: unreadByMember.get(member.name) ?? 0,
+    }
+  })
+  const captainInbox = await readUnreadMailbox(stateRoot, state.id, CAPTAIN_KEY)
   return {
     workspace,
     teamId: state.id,
@@ -203,7 +227,13 @@ export async function collectArchivedTeamsActivity(
       try {
         const state = await readArchivedTeam(root.stateRoot, teamId)
         if (state === undefined) continue
-        snapshots.push(await assembleTeamSnapshot(ctx, join(root.stateRoot, 'archive'), root.workspace, state))
+        snapshots.push(await assembleTeamSnapshot(
+          ctx,
+          join(root.stateRoot, 'archive'),
+          root.workspace,
+          state,
+          { includeRemoved: true, historic: true },
+        ))
       } catch {
         ctx.logger.warn(`agent-teams: skipped unreadable archived team "${teamId}" in workspace "${root.workspace}"`)
       }
