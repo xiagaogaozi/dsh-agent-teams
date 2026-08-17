@@ -32,6 +32,16 @@ const MEMBER_DENIED_TOOLS = [
 ] as const
 
 /**
+ * Split a `provider/model` spec into its route parts. A bare model id keeps
+ * the captain's provider; an explicit provider must not depend on it.
+ */
+function splitModelSpec(spec: string): { provider?: string; model: string } {
+  const slash = spec.indexOf('/')
+  if (slash > 0) return { provider: spec.slice(0, slash), model: spec.slice(slash + 1) }
+  return { model: spec }
+}
+
+/**
  * Restore the SessionId brand on a value that round-tripped through the
  * durable team file. The brand is erased by JSON serialization; the value
  * originated from `startContinuable`/`agent.id`, so this cast is the boundary
@@ -145,7 +155,7 @@ export async function spawnMember(
       parent: captain,
       persona: memberPersona(team, member, stateDir),
       toolFilter: { deny: [...MEMBER_DENIED_TOOLS] },
-      ...config.model !== undefined ? { agentOptions: { model: config.model } } : {},
+      ...config.model !== undefined ? { agentOptions: splitModelSpec(config.model) } : {},
       ...config.maxDepth !== undefined ? { maxDepth: config.maxDepth } : {},
     },
     signal,
