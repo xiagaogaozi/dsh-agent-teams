@@ -220,6 +220,35 @@ export function installMemberSelectionRuntime(ctx: Context, stateDir: string): M
     })
   })
 
+  // AgentTeams execution rules as a NON-shadowing prompt section. The member
+  // request's `persona` (order 0) is omitted for preset-mounted members so the
+  // preset's own persona stays authoritative; these rules must still reach the
+  // model, so they ride here at a later order (after persona, before tools).
+  ctx.subagents.registerContinuableSetup((childCtx) => {
+    const child = childCtx.agent
+    if (child === undefined) return () => undefined
+    const suffix = child.session.events.slice(child.session.header.seedLength ?? 0)
+    const descriptor = foldSubagentDescriptor(suffix)
+    if (descriptor?.mode !== 'continuable' || !descriptor.label.startsWith(MEMBER_LABEL_PREFIX)) {
+      return () => undefined
+    }
+    const identity = descriptor.label.slice(MEMBER_LABEL_PREFIX.length)
+    const separator = identity.indexOf(':')
+    if (separator < 1) return () => undefined
+    const teamId = identity.slice(0, separator)
+    const memberName = identity.slice(separator + 1)
+    const workspace = child.session.header.cwd ?? process.cwd()
+    const team = readTeamSync(join(workspace, stateDir), teamId)
+    const member = team?.members.find(candidate => candidate.name === memberName)
+    if (team === undefined || member === undefined) return () => undefined
+    const rules = customPersonaProtocol(team, member, stateDir)
+    return childCtx.systemPrompt.section({
+      name: 'agent-teams:member-rules',
+      order: 60,
+      text: rules,
+    })
+  })
+
   return {
     async withPending<T>(
       parentSessionId: string,
@@ -333,6 +362,21 @@ export async function spawnMember(
     throw new Error(`agent-teams: provider "${config.provider}" cannot restrict captain-only tools for members`)
   }
   const label = `${MEMBER_LABEL_PREFIX}${team.id}:${member.name}`
+  const presetId = member.preset ?? config.preset
+  // A preset-mounted member must let the preset's own persona (order 0) reach
+  // the model. Passing the AgentTeams member persona as the request `persona`
+  // shadows the deployment persona at order 0 and would override the preset's
+  // persona even when the preset mounts successfully. For preset members the
+  // AgentTeams execution rules are injected as a normal non-shadowing prompt
+  // section instead (see the registerContinuableSetup contribution below), so
+  // the preset persona stays authoritative while the member still knows how to
+  // use the team tools. A caller-provided explicit persona (member.persona) is
+  // still passed through for members without a preset.
+  const personaForRequest = (member.persona !== undefined && member.persona.trim() !== ''
+    && (presetId === undefined || presetId === '')
+  )
+    ? memberPersona(team, member, stateDir)
+    : undefined
   const start = await selections.withPending(captain.id, label, llmSelection, () => (
     ctx.subagents.startContinuable({
       provider: config.provider,
@@ -340,7 +384,7 @@ export async function spawnMember(
       request: {
         prompt: [{ type: 'text', text: memberWelcome(team) }],
         parent: captain,
-        persona: memberPersona(team, member, stateDir),
+        ...personaForRequest === undefined ? {} : { persona: personaForRequest },
         toolFilter: { deny: [...MEMBER_DENIED_TOOLS] },
         agentOptions: {
           provider: llmSelection.provider,
@@ -352,7 +396,6 @@ export async function spawnMember(
     })
   ))
   member.id = start.childId
-  const presetId = member.preset ?? config.preset
   if (presetId === undefined || presetId === '') return
   const child = ctx.agents.get(brandedSessionId(start.childId))
   if (child === undefined) {
