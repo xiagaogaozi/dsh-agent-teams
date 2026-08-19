@@ -93,7 +93,7 @@ function profilesFrom(value: unknown): MemberProfile[] | undefined {
 }
 
 export const name = 'agent-teams'
-export const inject = ['tools', 'subagents', 'systemPrompt', 'agents', 'agentPresets', 'settings']
+export const inject = ['tools', 'subagents', 'systemPrompt', 'agents', 'agentPresets', 'settings', 'llm']
 
 /** Plugin configuration. */
 export interface Config {
