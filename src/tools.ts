@@ -200,7 +200,13 @@ async function resolveRequestedEffort(
   requestedEffort: string | undefined,
   signal: AbortSignal,
 ): Promise<string | undefined> {
-  if (requestedEffort === undefined || requestedEffort.trim() === '') return inheritedEffort
+  // An explicit empty effort means "the model's own default", NOT "inherit the
+  // captain's effort": the caller distinguishes an omitted request (undefined)
+  // from an explicit empty override (''), so a template whose reasoningEffort
+  // field is blank must not pull the captain's high effort into a model that
+  // does not support it.
+  if (requestedEffort === undefined) return inheritedEffort
+  if (requestedEffort.trim() === '') return undefined
   try {
     const resolved = await ctx.llm.resolveCallConfig({
       provider,
@@ -388,8 +394,9 @@ export function registerAgentTeamsTools(ctx: Context, config: ToolsConfig): void
           model: requestedRoute.model ?? templateRoute.model,
           defaultModel: config.memberModel,
         }, exec.signal)
-        const requestedEffort = args.reasoning_effort
-          ?? (template?.reasoningEffort === '' ? undefined : template?.reasoningEffort)
+        const requestedEffort = args.reasoning_effort !== undefined
+          ? args.reasoning_effort
+          : template?.reasoningEffort
         const reasoningEffort = await resolveRequestedEffort(
           ctx,
           selection.provider,

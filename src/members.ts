@@ -149,13 +149,20 @@ export async function resolveMemberLlmSelection(
     throw new Error('cannot resolve the member LLM route from the current captain session')
   }
 
+  // The captain's reasoning effort is the inherited policy ONLY when the
+  // member's own model supports it. Resolving it here used to reject the whole
+  // member creation when the captain's effort (e.g. high) is unsupported by a
+  // member model (e.g. gemini-3.5-flash) — before the caller's own
+  // template/argument effort could apply. Fall back to the model default on an
+  // unsupported inherited effort, and let the caller override with the
+  // member's explicit effort afterwards.
   const resolved = await ctx.llm.resolveCallConfig({
     provider,
     model,
     ...current?.reasoningEffort === undefined
       ? {}
       : { reasoningEffort: current.reasoningEffort },
-  }, signal)
+  }, signal).catch(() => ctx.llm.resolveCallConfig({ provider, model }, signal))
   return {
     provider: resolved.provider,
     model: resolved.model,
