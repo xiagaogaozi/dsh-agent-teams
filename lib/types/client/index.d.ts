@@ -1,6 +1,6 @@
 /** Browser plugin for the AgentTeams activity floater and conversation card. */
 import type { ClientContext } from '@deepseek-ai/dsh-client-runtime/client';
-/** Required services: conversation nodes, slots, and sessions navigation. */
+/** Required services available across alpha4 and newer Web shells. */
 export declare const inject: string[];
 /**
  * Mount the floater through a body portal (the web shell has no top-right

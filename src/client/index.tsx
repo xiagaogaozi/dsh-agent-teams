@@ -7,11 +7,10 @@ import { createRoot } from 'react-dom/client'
 import type {} from '@deepseek-ai/dsh-client-ui-conversation/client'
 import { ActivityPanel } from './ActivityPanel.tsx'
 import { AgentTeamsCard, type AgentTeamsCardInjected } from './AgentTeamsCard.tsx'
-import { agentTeamsCardDefinition } from './agent-teams-card-definition.ts'
 import { TeamSettingsPage } from './TeamSettingsPage.tsx'
 
-/** Required services: conversation nodes, slots, and sessions navigation. */
-export const inject = ['conversationEvents', 'slots', 'sessions']
+/** Required services available across alpha4 and newer Web shells. */
+export const inject = ['slots', 'sessions']
 
 /**
  * Mount the floater through a body portal (the web shell has no top-right
@@ -33,8 +32,7 @@ export function apply(ctx: ClientContext): void {
     host.remove()
   }, 'agent-teams: activity panel')
 
-  ctx.conversationEvents.register(agentTeamsCardDefinition)
-  ctx.slots.inject('conversation.chat.node', () => ctx.slots.register({
+ ctx.slots.inject('conversation.chat.node', () => ctx.slots.register({
     name: 'conversation.chat.node',
     key: 'agent-teams',
     inject: (): AgentTeamsCardInjected => ({

@@ -86,6 +86,18 @@ export interface MemberSelectionRuntime {
 
 const MEMBER_LABEL_PREFIX = 'agent-teams:'
 
+type ContinuableSetup = (childCtx: Context) => () => void
+
+/** Register an optional member setup bridge when the host exposes it. */
+function registerContinuableSetupCompat(ctx: Context, setup: ContinuableSetup): void {
+  const runtime = ctx.subagents as typeof ctx.subagents & {
+    registerContinuableSetup?: (contribution: ContinuableSetup) => void
+  }
+  if (typeof runtime.registerContinuableSetup === 'function') {
+    runtime.registerContinuableSetup.call(ctx.subagents, setup)
+  }
+}
+
 function pendingSelectionKey(parentSessionId: string, label: string): string {
   return `${parentSessionId}\u0000${label}`
 }
@@ -181,7 +193,7 @@ export async function resolveMemberLlmSelection(
  */
 export function installMemberSelectionRuntime(ctx: Context, stateDir: string): MemberSelectionRuntime {
   const pending = new Map<string, MemberLlmSelection>()
-  ctx.subagents.registerContinuableSetup((childCtx) => {
+  registerContinuableSetupCompat(ctx, (childCtx) => {
     const child = childCtx.agent
     if (child === undefined) return () => undefined
     const suffix = child.session.events.slice(child.session.header.seedLength ?? 0)
@@ -224,7 +236,7 @@ export function installMemberSelectionRuntime(ctx: Context, stateDir: string): M
   // request's `persona` (order 0) is omitted for preset-mounted members so the
   // preset's own persona stays authoritative; these rules must still reach the
   // model, so they ride here at a later order (after persona, before tools).
-  ctx.subagents.registerContinuableSetup((childCtx) => {
+  registerContinuableSetupCompat(ctx, (childCtx) => {
     const child = childCtx.agent
     if (child === undefined) return () => undefined
     const suffix = child.session.events.slice(child.session.header.seedLength ?? 0)
